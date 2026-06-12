@@ -1,0 +1,14 @@
+{
+  "correcciones": [],
+  "frases_fallidas": [
+    {
+      "texto": "supia supia supia supia",
+      "razon": "sin_modelo",
+      "fecha": "2026-06-12T10:09:14.665812"
+    }
+  ],
+  "estadisticas": {
+    "total_consultas": 15,
+    "fallbacks": 1
+  }
+}

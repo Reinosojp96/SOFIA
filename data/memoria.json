@@ -1,0 +1,27 @@
+{
+  "eventos": [
+    {
+      "id": 1,
+      "titulo": "que tengo agendado hoy",
+      "fecha": "2026-06-12",
+      "hora": null,
+      "creado": "2026-06-12T07:59:58.414965"
+    },
+    {
+      "id": 2,
+      "titulo": "que tengo agendado hoy",
+      "fecha": "2026-06-12",
+      "hora": null,
+      "creado": "2026-06-12T08:00:12.819507"
+    },
+    {
+      "id": 3,
+      "titulo": "que hay eventos de los engohundados para oligro",
+      "fecha": "2026-06-12",
+      "hora": null,
+      "creado": "2026-06-12T10:15:11.229643"
+    }
+  ],
+  "alarmas": [],
+  "tareas": []
+}
