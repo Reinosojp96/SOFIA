@@ -1,130 +1,395 @@
 """
-Interfaz grafica de SOFIA con Tkinter.
+Interfaz grafica de SOFIA con PyQt6: ventana sin bordes, fondo
+semitransparente, esquinas redondeadas y estetica "futurista" tipo
+asistente flotante.
 
-- Caja de texto para escribir comandos (siempre funciona, sin microfono).
-- Boton "Hablar" para activar el microfono una vez.
-- Area de conversacion con el historial.
-- Estado visual (Escuchando / Procesando / Listo).
+Notas de diseno:
+- La ventana es frameless + translucida (WA_TranslucentBackground).
+  El panel principal tiene su propio fondo semitransparente con
+  border-radius via QSS; la ventana detras queda completamente
+  transparente.
+- Como no hay barra de titulo, se puede arrastrar la ventana
+  haciendo click y arrastrando (mousePressEvent / mouseMoveEvent).
+- on_comando / on_hablar_voz se ejecutan en hilos; usan senales
+  (pyqtSignal) para volver al hilo principal antes de tocar widgets,
+  que es obligatorio en Qt.
 """
 
-import tkinter as tk
-from tkinter import scrolledtext
+import os
 import threading
+from datetime import datetime
+
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QFrame, QLabel, QLineEdit, QPushButton,
+    QVBoxLayout, QHBoxLayout, QTextEdit, QGraphicsDropShadowEffect,
+)
+from PyQt6.QtGui import QColor
+
+try:
+    from skills import clima as _clima
+except Exception:
+    _clima = None
+
+try:
+    from core import memoria as _memoria
+except Exception:
+    _memoria = None
 
 
-class AleWidget(tk.Tk):
+# Paleta
+BG_PANEL = "rgba(15, 18, 32, 200)"
+BG_CARD = "rgba(255, 255, 255, 18)"
+FG_TEXT = "#e6e8f0"
+FG_MUTED = "#8a93ad"
+ACCENT = "#7c5cff"
+ACCENT_2 = "#4cc9f0"
+GREEN = "#3fb950"
+AMBER = "#d29922"
+
+
+class _Senales(QObject):
+    """Senales para actualizar la UI desde hilos secundarios."""
+    mensaje = pyqtSignal(str, str)
+    estado = pyqtSignal(str, str)
+    tarjetas = pyqtSignal(object, object, object)
+
+
+class AleWidget(QWidget):
     def __init__(self, on_comando, on_hablar_voz):
-        """
-        on_comando: funcion(texto) -> str  (procesa un comando de texto)
-        on_hablar_voz: funcion() -> None   (activa el microfono en un hilo aparte)
-        """
         super().__init__()
         self.on_comando = on_comando
         self.on_hablar_voz = on_hablar_voz
 
-        self.title("SOFÍA")
-        self.geometry("440x580")
-        self.configure(bg="#0d1117")
-        self.resizable(False, False)
+        self.senales = _Senales()
+        self.senales.mensaje.connect(self._agregar_mensaje_ui)
+        self.senales.estado.connect(self._set_estado_ui)
+        self.senales.tarjetas.connect(self._aplicar_tarjetas)
+
+        self._drag_pos = None
+
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.resize(420, 600)
 
         self._construir_ui()
+        self._actualizar_tarjetas_async()
+
+    # ------------------------------------------------------------
+    # Construccion de la interfaz
+    # ------------------------------------------------------------
 
     def _construir_ui(self):
-        # Encabezado
-        header = tk.Frame(self, bg="#0d1117")
-        header.pack(fill="x", padx=16, pady=(16, 8))
+        panel = QFrame(self)
+        panel.setObjectName("panel")
+        panel.setStyleSheet(f"""
+            #panel {{
+                background-color: {BG_PANEL};
+                border-radius: 18px;
+                border: 1px solid rgba(255,255,255,25);
+            }}
+        """)
 
-        # Logo / nombre
-        tk.Label(
-            header, text="SOFÍA", fg="#c084fc", bg="#0d1117",
-            font=("Segoe UI", 20, "bold")
-        ).pack(side="left")
+        sombra = QGraphicsDropShadowEffect()
+        sombra.setBlurRadius(30)
+        sombra.setColor(QColor(0, 0, 0, 160))
+        sombra.setOffset(0, 6)
+        panel.setGraphicsEffect(sombra)
 
-        tk.Label(
-            header, text="IA de voz", fg="#6e7681", bg="#0d1117",
-            font=("Segoe UI", 9)
-        ).pack(side="left", padx=(8, 0), pady=(6, 0))
+        layout_externo = QVBoxLayout(self)
+        layout_externo.setContentsMargins(0, 0, 0, 0)
+        layout_externo.addWidget(panel)
 
-        self.estado_var = tk.StringVar(value="Lista")
-        self.estado_label = tk.Label(
-            header, textvariable=self.estado_var,
-            fg="#3fb950", bg="#0d1117", font=("Segoe UI", 10)
-        )
-        self.estado_label.pack(side="right")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(14)
 
-        # Area de conversacion
-        self.area_chat = scrolledtext.ScrolledText(
-            self, bg="#161b22", fg="#c9d1d9",
-            insertbackground="#c9d1d9",
-            font=("Segoe UI", 10), wrap="word",
-            relief="flat", padx=10, pady=10
-        )
-        self.area_chat.pack(fill="both", expand=True, padx=16, pady=8)
-        self.area_chat.configure(state="disabled")
+        self._construir_header(layout)
+        self._construir_saludo(layout)
+        self._construir_tarjetas(layout)
+        self._construir_chat(layout)
+        self._construir_barra_inferior(layout)
 
-        # Barra inferior: entrada de texto + botones
-        barra = tk.Frame(self, bg="#0d1117")
-        barra.pack(fill="x", padx=16, pady=(0, 16))
+    def _construir_header(self, layout):
+        header = QHBoxLayout()
 
-        self.entrada = tk.Entry(
-            barra, bg="#161b22", fg="#c9d1d9",
-            insertbackground="#c9d1d9", font=("Segoe UI", 11),
-            relief="flat"
-        )
-        self.entrada.pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 8))
-        self.entrada.bind("<Return>", self._enviar_texto)
+        titulo = QLabel("●  SOFÍA")
+        titulo.setStyleSheet(f"color: {ACCENT}; font-size: 16px; font-weight: 700; background: transparent;")
+        header.addWidget(titulo)
 
-        btn_enviar = tk.Button(
-            barra, text="Enviar", command=self._enviar_texto,
-            bg="#238636", fg="white", relief="flat", font=("Segoe UI", 10, "bold")
-        )
-        btn_enviar.pack(side="left", padx=(0, 8))
+        header.addStretch()
 
-        btn_hablar = tk.Button(
-            barra, text="🎤 Hablar", command=self._activar_voz,
-            bg="#7c3aed", fg="white", relief="flat", font=("Segoe UI", 10, "bold")
-        )
-        btn_hablar.pack(side="left")
+        btn_cerrar = QPushButton("✕")
+        btn_cerrar.setFixedSize(28, 28)
+        btn_cerrar.setStyleSheet(f"""
+            QPushButton {{
+                color: {FG_MUTED}; background: transparent;
+                border: none; font-size: 13px;
+            }}
+            QPushButton:hover {{ color: {FG_TEXT}; }}
+        """)
+        btn_cerrar.clicked.connect(self.close)
+        header.addWidget(btn_cerrar)
 
-        self.agregar_mensaje("SOFÍA", "Hola, soy Sofía. Escribe un comando o presiona Hablar.")
+        layout.addLayout(header)
 
-    # ---------- API publica ----------
+    def _construir_saludo(self, layout):
+        nombre = os.environ.get("SOFIA_USER_NAME", "Julián")
+        saludo = self._saludo_segun_hora()
+
+        titulo = QLabel(f"{saludo}, {nombre} 👋")
+        titulo.setStyleSheet(f"color: {FG_TEXT}; font-size: 18px; font-weight: 700; background: transparent;")
+        layout.addWidget(titulo)
+
+        subtitulo = QLabel("¿Qué deseas hacer hoy?")
+        subtitulo.setStyleSheet(f"color: {FG_MUTED}; font-size: 11px; background: transparent;")
+        layout.addWidget(subtitulo)
+
+        self.estado_label = QLabel("● Lista")
+        self.estado_label.setStyleSheet(f"color: {GREEN}; font-size: 11px; font-weight: 600; background: transparent;")
+        layout.addWidget(self.estado_label)
+
+    def _construir_tarjetas(self, layout):
+        fila = QHBoxLayout()
+        fila.setSpacing(10)
+
+        self.card_tareas = self._crear_tarjeta("✅ Tareas pendientes")
+        self.card_clima = self._crear_tarjeta("⛅ Clima actual")
+        self.card_recordatorios = self._crear_tarjeta("🔔 Recordatorios hoy")
+
+        for card in (self.card_tareas, self.card_clima, self.card_recordatorios):
+            fila.addWidget(card["frame"])
+
+        layout.addLayout(fila)
+
+    def _crear_tarjeta(self, titulo_texto):
+        frame = QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {BG_CARD};
+                border-radius: 12px;
+            }}
+        """)
+        v = QVBoxLayout(frame)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(2)
+
+        titulo = QLabel(titulo_texto)
+        titulo.setStyleSheet(f"color: {FG_MUTED}; font-size: 9px; background: transparent;")
+        v.addWidget(titulo)
+
+        valor = QLabel("—")
+        valor.setStyleSheet(f"color: {FG_TEXT}; font-size: 18px; font-weight: 700; background: transparent;")
+        v.addWidget(valor)
+
+        sub = QLabel("")
+        sub.setStyleSheet(f"color: {FG_MUTED}; font-size: 9px; background: transparent;")
+        v.addWidget(sub)
+
+        return {"frame": frame, "valor": valor, "sub": sub}
+
+    def _construir_chat(self, layout):
+        self.area_chat = QTextEdit()
+        self.area_chat.setReadOnly(True)
+        self.area_chat.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: rgba(255,255,255,10);
+                color: {FG_TEXT};
+                border-radius: 12px;
+                border: none;
+                padding: 10px;
+                font-size: 11px;
+            }}
+        """)
+        layout.addWidget(self.area_chat, stretch=1)
+
+    def _construir_barra_inferior(self, layout):
+        barra = QHBoxLayout()
+        barra.setSpacing(8)
+
+        btn_mic = QPushButton("🎤")
+        btn_mic.setFixedSize(38, 38)
+        btn_mic.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_CARD};
+                border-radius: 19px;
+                font-size: 15px;
+                color: {ACCENT_2};
+                border: none;
+            }}
+            QPushButton:hover {{ background-color: rgba(255,255,255,35); }}
+        """)
+        btn_mic.clicked.connect(self._activar_voz)
+        barra.addWidget(btn_mic)
+
+        self.entrada = QLineEdit()
+        self.entrada.setPlaceholderText("Escribe o habla...")
+        self.entrada.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {BG_CARD};
+                color: {FG_TEXT};
+                border-radius: 19px;
+                padding: 0 14px;
+                font-size: 11px;
+                border: none;
+            }}
+        """)
+        self.entrada.setFixedHeight(38)
+        self.entrada.returnPressed.connect(self._enviar_texto)
+        barra.addWidget(self.entrada, stretch=1)
+
+        btn_enviar = QPushButton("Enviar")
+        btn_enviar.setFixedHeight(38)
+        btn_enviar.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {ACCENT};
+                color: white;
+                border-radius: 19px;
+                padding: 0 16px;
+                font-size: 11px;
+                font-weight: 700;
+                border: none;
+            }}
+            QPushButton:hover {{ background-color: #6a4ce0; }}
+        """)
+        btn_enviar.clicked.connect(self._enviar_texto)
+        barra.addWidget(btn_enviar)
+
+        layout.addLayout(barra)
+
+    # ------------------------------------------------------------
+    # Arrastrar ventana sin bordes
+    # ------------------------------------------------------------
+
+    def mousePressEvent(self, evento):
+        if evento.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = evento.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, evento):
+        if self._drag_pos is not None and evento.buttons() == Qt.MouseButton.LeftButton:
+            self.move(evento.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, evento):
+        self._drag_pos = None
+
+    # ------------------------------------------------------------
+    # API publica (llamada desde main.py, posiblemente desde hilos)
+    # ------------------------------------------------------------
 
     def agregar_mensaje(self, autor, texto):
-        self.area_chat.configure(state="normal")
-        self.area_chat.insert("end", f"{autor}: {texto}\n\n")
-        self.area_chat.see("end")
-        self.area_chat.configure(state="disabled")
+        """Seguro de llamar desde cualquier hilo."""
+        self.senales.mensaje.emit(autor, texto)
 
-    def set_estado(self, texto, color="#3fb950"):
-        self.estado_var.set(texto)
-        self.estado_label.configure(fg=color)
+    def set_estado(self, texto, color=GREEN):
+        """Seguro de llamar desde cualquier hilo."""
+        self.senales.estado.emit(texto, color)
 
-    # ---------- Eventos internos ----------
+    def refrescar_tarjetas(self):
+        self._actualizar_tarjetas_async()
 
-    def _enviar_texto(self, _evento=None):
-        texto = self.entrada.get().strip()
+    # ------------------------------------------------------------
+    # Slots (corren en el hilo principal de Qt)
+    # ------------------------------------------------------------
+
+    def _agregar_mensaje_ui(self, autor, texto):
+        self.area_chat.append(f"<b>{autor}:</b> {texto}")
+
+    def _set_estado_ui(self, texto, color):
+        self.estado_label.setText(f"● {texto}")
+        self.estado_label.setStyleSheet(f"color: {color}; font-size: 11px; font-weight: 600; background: transparent;")
+
+    # ------------------------------------------------------------
+    # Eventos internos
+    # ------------------------------------------------------------
+
+    def _saludo_segun_hora(self):
+        hora = datetime.now().hour
+        if hora < 12:
+            return "Buenos días"
+        if hora < 19:
+            return "Buenas tardes"
+        return "Buenas noches"
+
+    def _enviar_texto(self):
+        texto = self.entrada.text().strip()
         if not texto:
             return
-        self.entrada.delete(0, "end")
+        self.entrada.clear()
         self.agregar_mensaje("Tú", texto)
-        self.set_estado("Procesando...", "#d29922")
+        self.set_estado("Procesando...", AMBER)
 
         def trabajo():
             respuesta = self.on_comando(texto)
-            self.after(0, lambda: self._mostrar_respuesta(respuesta))
+            self.agregar_mensaje("SOFÍA", respuesta)
+            self.set_estado("Lista", GREEN)
+            self.refrescar_tarjetas()
 
         threading.Thread(target=trabajo, daemon=True).start()
 
-    def _mostrar_respuesta(self, respuesta):
-        self.agregar_mensaje("SOFÍA", respuesta)
-        self.set_estado("Lista", "#3fb950")
-
     def _activar_voz(self):
-        self.set_estado("Escuchando...", "#7c3aed")
+        self.set_estado("Escuchando...", ACCENT)
 
         def trabajo():
             self.on_hablar_voz()
-            self.after(0, lambda: self.set_estado("Lista", "#3fb950"))
+            self.set_estado("Lista", GREEN)
+            self.refrescar_tarjetas()
 
         threading.Thread(target=trabajo, daemon=True).start()
+
+    # ------------------------------------------------------------
+    # Tarjetas de resumen
+    # ------------------------------------------------------------
+
+    def _actualizar_tarjetas_async(self):
+        def trabajo():
+            try:
+                n_tareas = _memoria.contar_tareas_pendientes() if _memoria else None
+            except Exception:
+                n_tareas = None
+
+            try:
+                n_record = _memoria.contar_eventos_hoy() if _memoria else None
+            except Exception:
+                n_record = None
+
+            try:
+                clima_info = _clima.obtener_resumen() if _clima else None
+            except Exception:
+                clima_info = None
+
+            self.senales.tarjetas.emit(n_tareas, n_record, clima_info)
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _aplicar_tarjetas(self, n_tareas, n_record, clima_info):
+        self.card_tareas["valor"].setText("--" if n_tareas is None else str(n_tareas))
+        self.card_recordatorios["valor"].setText("--" if n_record is None else str(n_record))
+
+        if clima_info and clima_info.get("ok"):
+            self.card_clima["valor"].setText(f"{clima_info['temp']}°C")
+            self.card_clima["sub"].setText(f"{clima_info['descripcion']} · {clima_info['ciudad']}")
+        else:
+            mensaje = "Sin conexión"
+            if clima_info and clima_info.get("mensaje"):
+                mensaje = clima_info["mensaje"]
+            self.card_clima["valor"].setText(mensaje)
+            self.card_clima["valor"].setStyleSheet(
+                f"color: {FG_TEXT}; font-size: 13px; font-weight: 700; background: transparent;"
+            )
+            self.card_clima["sub"].setText("")
+
+
+def ejecutar_app(on_comando, on_hablar_voz, post_init=None):
+    """
+    Helper para main.py: crea la QApplication, la ventana y arranca el
+    event loop. post_init(widget) se llama justo despues de crear la
+    ventana (para lanzar hilos de fondo, mensajes de bienvenida, etc.)
+    """
+    app = QApplication([])
+    widget = AleWidget(on_comando, on_hablar_voz)
+
+    if post_init:
+        post_init(widget)
+
+    widget.show()
+    app.exec()

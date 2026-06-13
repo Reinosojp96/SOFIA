@@ -5,10 +5,20 @@
       "texto": "supia supia supia supia",
       "razon": "sin_modelo",
       "fecha": "2026-06-12T10:09:14.665812"
+    },
+    {
+      "texto": "son",
+      "razon": "sin_modelo",
+      "fecha": "2026-06-12T22:01:27.678948"
+    },
+    {
+      "texto": "sofia",
+      "razon": "sin_modelo",
+      "fecha": "2026-06-12T22:12:59.041052"
     }
   ],
   "estadisticas": {
-    "total_consultas": 15,
-    "fallbacks": 1
+    "total_consultas": 26,
+    "fallbacks": 3
   }
 }

@@ -17,6 +17,7 @@ KEYWORDS = [
     "alarma", "despiertame", "despertame", "despiertame",
     "recuerdame", "recordatorio", "evento", "agenda", "agendar",
     "que tengo", "tengo algo", "mis eventos",
+    "tareas pendientes", "mis tareas", "que tareas", "tarea",
 ]
 
 
@@ -106,6 +107,39 @@ def _listar_agenda(texto: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tareas pendientes
+# ---------------------------------------------------------------------------
+
+def _listar_tareas(_texto: str = None) -> str:
+    """Responde a 'qué tareas tengo', 'mis tareas pendientes'."""
+    tareas = memoria.listar_tareas(solo_pendientes=True)
+
+    if not tareas:
+        return "No tienes tareas pendientes."
+
+    if len(tareas) == 1:
+        return f"Tienes una tarea pendiente: {tareas[0]['texto']}."
+
+    resumen = ", ".join(t["texto"] for t in tareas[:5])
+    return f"Tienes {len(tareas)} tareas pendientes: {resumen}."
+
+
+def _crear_tarea(texto: str) -> str:
+    """Crea una tarea a partir de 'agrega la tarea X' / 'nueva tarea X'."""
+    resto = texto
+    for prefijo in ["agrega la tarea", "agregar tarea", "nueva tarea", "crear tarea", "tarea"]:
+        if prefijo in resto:
+            resto = resto.split(prefijo, 1)[-1].strip(' :')
+            break
+
+    if not resto:
+        return "¿Cuál es la tarea que quieres agregar?"
+
+    memoria.agregar_tarea(resto)
+    return f"Tarea agregada: {resto}."
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -119,10 +153,19 @@ def manejar(texto: str) -> str:
     if any(p in texto for p in ["alarma", "despiertame", "despertame"]):
         return _crear_alarma(texto)
 
-    if any(p in texto for p in ["que tengo", "tengo algo", "mis eventos", "agenda"]):
-        return _listar_agenda(texto)
+    # Tareas: primero "agrega/crea tarea X" (crear), si no, "qué tareas tengo" (listar)
+    if any(p in texto for p in ["agrega la tarea", "agregar tarea", "nueva tarea", "crear tarea"]):
+        return _crear_tarea(texto)
 
-    if any(p in texto for p in ["recuerdame", "recordatorio", "evento", "agendar"]):
+    if any(p in texto for p in ["tareas pendientes", "mis tareas", "que tareas"]):
+        return _listar_tareas()
+
+    # Eventos: "agéndame/recuérdame X" (crear) tiene prioridad sobre "agenda" como
+    # consulta, ya que "agenda" es substring de "agendar".
+    if any(p in texto for p in ["recuerdame", "recordatorio", "agendar", "agéndame", "agendame"]):
         return _crear_evento(texto)
+
+    if any(p in texto for p in ["que tengo", "tengo algo", "mis eventos", "agenda", "evento"]):
+        return _listar_agenda(texto)
 
     return "No entendí la solicitud de tiempo o agenda."

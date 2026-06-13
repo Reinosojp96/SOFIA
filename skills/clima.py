@@ -74,3 +74,43 @@ def consultar_clima(texto):
         )
     except Exception as e:
         return f"No pude consultar el clima de {ciudad}: {e}"
+
+
+def obtener_resumen(ciudad=None):
+    """
+    Para la tarjeta 'Clima actual' de la interfaz.
+    Devuelve un dict:
+      {"ok": True, "temp": int, "descripcion": str, "ciudad": str}
+      {"ok": False, "mensaje": "Sin conexión"}
+
+    Nunca lanza excepción ni hace que la UI se rompa: si no hay
+    API key o falla la consulta, devuelve ok=False con mensaje
+    "Sin conexión" para mostrar en la tarjeta.
+    """
+    ciudad = ciudad or CIUDAD_DEFECTO
+
+    if not API_KEY:
+        return {"ok": False, "mensaje": "Sin conexión"}
+
+    try:
+        url = "https://api.openweathermap.org/data/2.5/weather"
+        params = {
+            "q": ciudad,
+            "appid": API_KEY,
+            "units": "metric",
+            "lang": "es",
+        }
+        resp = requests.get(url, params=params, timeout=4)
+        data = resp.json()
+
+        if resp.status_code != 200:
+            return {"ok": False, "mensaje": "Sin conexión"}
+
+        return {
+            "ok": True,
+            "temp": round(data["main"]["temp"]),
+            "descripcion": data["weather"][0]["description"].capitalize(),
+            "ciudad": ciudad.title(),
+        }
+    except Exception:
+        return {"ok": False, "mensaje": "Sin conexión"}

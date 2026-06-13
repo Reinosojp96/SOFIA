@@ -97,6 +97,26 @@ def desactivar_alarma(alarma_id):
     _guardar(data)
 
 
+def alarmas_para_disparar(hora_actual):
+    """
+    Devuelve las alarmas activas cuya 'hora' (HH:MM) coincide con
+    hora_actual (HH:MM), y las desactiva de inmediato (alarmas de un
+    solo uso, como un "despiértame a las X").
+
+    Pensado para llamarse periódicamente (cada ~20-30s) desde un hilo
+    de fondo en main.py.
+    """
+    data = _leer()
+    disparadas = []
+    for a in data["alarmas"]:
+        if a["activa"] and a["hora"] == hora_actual:
+            a["activa"] = False
+            disparadas.append(dict(a))
+    if disparadas:
+        _guardar(data)
+    return disparadas
+
+
 # ---------- Tareas ----------
 
 def agregar_tarea(texto):
@@ -124,3 +144,92 @@ def completar_tarea(tarea_id):
         if t["id"] == tarea_id:
             t["hecha"] = True
     _guardar(data)
+
+
+# ---------- Resumen para la interfaz ----------
+
+def contar_tareas_pendientes():
+    """Para la tarjeta 'Tareas pendientes' de la UI."""
+    return len(listar_tareas(solo_pendientes=True))
+
+
+def contar_eventos_hoy():
+    """Para la tarjeta 'Recordatorios hoy' de la UI."""
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    return len([e for e in listar_eventos() if e.get("fecha") == hoy])
+
+
+# ---------------------------------------------------------------------------
+# Notas (compatibles con NebulaNotes: ~/Documentos/nebula_notes.json)
+# ---------------------------------------------------------------------------
+#
+# Se usa el MISMO archivo y formato que tu app NebulaNotes (.pyw), así
+# las notas creadas por voz aparecen ahí y viceversa. No se toca la
+# papelera ni nada más de ese archivo: solo la lista "notes".
+
+from pathlib import Path
+
+_NOTAS_PATH = Path.home() / "Documentos" / "nebula_notes.json"
+
+
+def _leer_notas_archivo():
+    if not _NOTAS_PATH.exists():
+        return {"notes": []}
+    try:
+        with open(_NOTAS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            data.setdefault("notes", [])
+            return data
+    except Exception:
+        return {"notes": []}
+
+
+def _guardar_notas_archivo(data):
+    _NOTAS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_NOTAS_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def agregar_nota(contenido, titulo=None):
+    """
+    Crea una nota nueva (al principio de la lista, igual que NebulaNotes
+    al pulsar '+ NUEVA'). Si no se da título, usa la fecha/hora actual.
+    """
+    data = _leer_notas_archivo()
+
+    ahora = datetime.now()
+    if not titulo:
+        titulo = f"Nota de voz {ahora.strftime('%d/%m %H:%M')}"
+
+    nueva = {
+        "id": ahora.timestamp(),
+        "title": titulo,
+        "content": contenido,
+        "created": ahora.isoformat(),
+        "modified": ahora.isoformat(),
+    }
+    data["notes"].insert(0, nueva)
+    _guardar_notas_archivo(data)
+    return nueva
+
+
+def listar_notas():
+    """Devuelve la lista de notas (más reciente primero)."""
+    return _leer_notas_archivo()["notes"]
+
+
+def ultima_nota():
+    notas = listar_notas()
+    return notas[0] if notas else None
+
+# ---------- Resumen para la interfaz ----------
+
+def contar_tareas_pendientes():
+    """Para la tarjeta 'Tareas pendientes' de la UI."""
+    return len(listar_tareas(solo_pendientes=True))
+
+
+def contar_eventos_hoy():
+    """Para la tarjeta 'Recordatorios hoy' de la UI."""
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    return len([e for e in listar_eventos() if e.get("fecha") == hoy])
