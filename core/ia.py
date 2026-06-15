@@ -8,15 +8,22 @@ MEJORAS v2:
   - Soporte de aprendizaje automático: registra errores y correcciones en
     data/aprendizaje.json para retroalimentación futura
   - historial de conversación configurable (memoria de contexto corta)
+  - Descarga automática del modelo GGUF desde Hugging Face
 """
 
 import os
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
+import urllib.request
+import urllib.parse
 
 _llm = None
 _disponible = False
+
+# URL del modelo GGUF en Hugging Face
+MODEL_URL = "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf?download=true"
 
 # Ruta del modelo: SOFIA_MODEL_PATH tiene prioridad; ALE_MODEL_PATH como alias
 # para no romper instalaciones existentes
@@ -37,6 +44,67 @@ _LEARNING_PATH = Path(__file__).parent.parent / "data" / "aprendizaje.json"
 
 
 # ---------------------------------------------------------------------------
+# Descarga del modelo
+# ---------------------------------------------------------------------------
+
+def _descargar_modelo():
+    """Descarga el modelo GGUF desde Hugging Face si no existe."""
+    model_path = Path(MODEL_PATH)
+    
+    # Si el modelo ya existe, no hacer nada
+    if model_path.exists():
+        print(f"[ia] Modelo ya existe en {model_path}")
+        return True
+    
+    # Crear directorio data si no existe
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    print(f"[ia] Modelo no encontrado. Iniciando descarga desde Hugging Face...")
+    print(f"[ia] URL: {MODEL_URL}")
+    print(f"[ia] Destino: {model_path}")
+    print(f"[ia] Tamaño aproximado: ~4.5 GB. Por favor espera...")
+    
+    try:
+        # Configurar la solicitud con headers para evitar problemas
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        req = urllib.request.Request(MODEL_URL, headers=headers)
+        
+        # Descargar con barra de progreso simple
+        with urllib.request.urlopen(req) as response:
+            total_size = int(response.headers.get('Content-Length', 0))
+            downloaded = 0
+            chunk_size = 8192
+            
+            with open(model_path, 'wb') as out_file:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    out_file.write(chunk)
+                    downloaded += len(chunk)
+                    
+                    # Mostrar progreso
+                    if total_size > 0:
+                        percent = (downloaded / total_size) * 100
+                        mb_downloaded = downloaded / (1024 * 1024)
+                        mb_total = total_size / (1024 * 1024)
+                        print(f"\r[ia] Descargando: {percent:.1f}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)", end='')
+                        sys.stdout.flush()
+        
+        print("\n[ia] ¡Descarga completada!")
+        return True
+        
+    except Exception as e:
+        print(f"\n[ia] Error al descargar el modelo: {e}")
+        # Limpiar archivo parcial si existe
+        if model_path.exists():
+            model_path.unlink()
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Carga del modelo
 # ---------------------------------------------------------------------------
 
@@ -44,12 +112,23 @@ def _cargar():
     global _llm, _disponible
     if _llm is not None:
         return
+    
+    # Intentar descargar el modelo si no existe
+    if not _descargar_modelo():
+        print(f"[ia] No se pudo obtener el modelo")
+        _disponible = False
+        return
+    
     try:
         from llama_cpp import Llama
         if not os.path.exists(MODEL_PATH):
-            print(f"[ia] Modelo no encontrado en {MODEL_PATH}")
+            print(f"[ia] Modelo no encontrado en {MODEL_PATH} después de la descarga")
             _disponible = False
             return
+        
+        print(f"[ia] Cargando modelo desde {MODEL_PATH}...")
+        print(f"[ia] Esto puede tomar unos segundos la primera vez...")
+        
         _llm = Llama(
             model_path=MODEL_PATH,
             n_ctx=2048,
@@ -57,6 +136,8 @@ def _cargar():
             verbose=False,
         )
         _disponible = True
+        print(f"[ia] Modelo cargado exitosamente")
+        
     except Exception as e:
         print(f"[ia] No se pudo cargar el modelo: {e}")
         _disponible = False

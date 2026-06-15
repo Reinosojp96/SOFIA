@@ -1,42 +1,81 @@
 """
-Texto a voz con pyttsx3 (funciona offline).
+Punto de entrada unificado para TTS.
 
-Nota: se crea una instancia nueva del motor cada vez que se habla.
-pyttsx3 tiene un bug conocido donde reutilizar la misma instancia
-despues de la primera llamada a runAndWait() deja de sonar en
-Windows. Crear una instancia por llamada es mas lento (decenas de ms)
-pero confiable.
+Lee SOFIA_TTS_MOTOR del .env:
+  "pyttsx3"  -> motor clásico, offline, funciona en CPU, voz robótica (defecto)
+  "qwen"     -> Qwen3-TTS 0.6B, requiere GPU Nvidia con 4GB+ VRAM, voz natural
+
+Si el motor preferido falla al cargar (GPU no disponible, modelo no
+descargado, etc.), cae automáticamente a pyttsx3 con un aviso.
+
+El resto del proyecto llama solo a:
+  from voz.hablar import hablar
+  hablar("texto")
 """
 
-import pyttsx3
+import os
 import threading
 
-_lock = threading.Lock()
+MOTOR = os.environ.get("SOFIA_TTS_MOTOR", "pyttsx3").lower().strip()
+
+# ---- Motor Qwen --------------------------------------------------------
+
+_qwen_motor  = None
+_qwen_ok     = False
+_qwen_lock   = threading.Lock()
 
 
-def hablar(texto):
-    """Convierte texto a voz. Bloqueante."""
-    with _lock:
+def _init_qwen():
+    global _qwen_motor, _qwen_ok
+    try:
+        from voz.hablar_qwen import HabladorQwen
+        h = HabladorQwen()
+        if h.disponible():
+            _qwen_motor = h
+            _qwen_ok    = True
+            print("[tts] Usando motor: Qwen3-TTS 0.6B (GPU)")
+        else:
+            raise RuntimeError("modelo no disponible")
+    except Exception as e:
+        print(f"[tts] Qwen3-TTS no disponible ({e}), usando pyttsx3 como respaldo.")
+        _qwen_ok = False
+
+
+if MOTOR == "qwen":
+    _init_qwen()
+else:
+    print("[tts] Usando motor: pyttsx3 (CPU, voz estándar)")
+
+
+# ---- Motor pyttsx3 -----------------------------------------------------
+
+_pyttsx3_lock = threading.Lock()
+
+
+def _hablar_pyttsx3(texto: str):
+    with _pyttsx3_lock:
         try:
+            import pyttsx3
             engine = pyttsx3.init()
-            # Velocidad natural: 160-170 palabras/min suena mas humano que 175
-            engine.setProperty("rate", 165)
-            # Intentar voz femenina para Sofia (si el sistema la tiene)
-            voices = engine.getProperty("voices")
-            voz_femenina = None
-            for v in voices:
-                # Buscar voz en espanol femenina
-                if any(lang in (v.languages or []) for lang in [b"es", "es", "es_CO", "es_ES", "es-CO", "es-ES"]):
-                    # Heuristica: IDs con "female", "zira", "helena", "sabina", "laura"
-                    vid = (v.id or "").lower()
-                    vname = (v.name or "").lower()
-                    if any(k in vid or k in vname for k in ["female", "zira", "helena", "sabina", "laura", "sofia", "mujer"]):
-                        voz_femenina = v.id
-                        break
-            if voz_femenina:
-                engine.setProperty("voice", voz_femenina)
+            engine.setProperty("rate", 175)
             engine.say(texto)
             engine.runAndWait()
             engine.stop()
         except Exception as e:
-            print(f"[voz] Error al hablar: {e}")
+            print(f"[tts] Error pyttsx3: {e}")
+
+
+# ---- API pública -------------------------------------------------------
+
+def hablar(texto: str):
+    """
+    Convierte texto a voz usando el motor configurado.
+    Bloqueante: retorna cuando el audio termina de reproducirse.
+    """
+    if not texto or not texto.strip():
+        return
+
+    if MOTOR == "qwen" and _qwen_ok and _qwen_motor:
+        _qwen_motor.hablar(texto)
+    else:
+        _hablar_pyttsx3(texto)

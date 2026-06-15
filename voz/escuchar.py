@@ -118,6 +118,25 @@ def _seleccionar_dispositivo():
     return None  # deja que sounddevice use el default
 
 
+# Vocabulario que se le "sugiere" a Whisper antes de transcribir, para
+# sesgar el reconocimiento hacia comandos y nombres de apps comunes.
+# Mejora mucho casos como "abre Excel" -> "abre xc"/"aurexel".
+# Personalízalo con los nombres reales de tus apps frecuentes (variable
+# de entorno SOFIA_VOCAB, separado por comas, se agrega al final).
+INITIAL_PROMPT = (
+    "Sofía, abre Word, abre Excel, abre PowerPoint, abre Chrome, "
+    "abre Brave, abre el navegador, abre WhatsApp, abre Spotify, "
+    "abre la calculadora, abre el bloc de notas, abre Visual Studio Code, "
+    "cierra Chrome, escanear aplicaciones, qué hora es, qué fecha es, "
+    "cómo está el clima en Ibagué, reproduce música en YouTube, "
+    "anota que, qué tareas tengo, crea una carpeta, crea un archivo, "
+    "copia, mueve, elimina, duplica."
+)
+_vocab_extra = os.environ.get("SOFIA_VOCAB", "").strip()
+if _vocab_extra:
+    INITIAL_PROMPT += " " + _vocab_extra
+
+
 # ---------------------------------------------------------------------------
 # Carga perezosa de modelos
 # ---------------------------------------------------------------------------

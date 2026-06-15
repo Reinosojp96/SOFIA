@@ -1,4 +1,5 @@
 # ── Núcleo de audio ──────────────────────────────────────────────────────────
+
 sounddevice>=0.4.6          # captura de micrófono en tiempo real (reemplaza PyAudio)
 numpy>=1.24                 # manipulación de arrays de audio
 # ── VAD (Voice Activity Detection) ───────────────────────────────────────────
@@ -6,13 +7,25 @@ numpy>=1.24                 # manipulación de arrays de audio
 # Solo necesitamos torch como backend ligero (CPU):
 torch>=2.0,<3.0             # backend de Silero-VAD (instalar versión CPU para ahorrar espacio)
 torchaudio>=2.0,<3.0        # requerido por silero-vad
+
+
 # ── STT (Speech-to-Text) ─────────────────────────────────────────────────────
+
 faster-whisper>=1.0.0       # Whisper optimizado con CTranslate2; modelo "tiny" (~75 MB)
 # El modelo se descarga automáticamente la primera vez que se instancia WhisperModel.
+
+
 # ── Texto a voz (TTS) ────────────────────────────────────────────────────────
+
 pyttsx3>=2.90               # TTS offline multiplataforma
+
+
 # ── IA local (llama.cpp) ─────────────────────────────────────────────────────
+
 llama-cpp-python            # requiere compilador C++; ver README para instrucciones
+
+
 # ── Skills / utilidades ──────────────────────────────────────────────────────
+
 requests>=2.31              # peticiones HTTP (clima, web, etc.)
 python-dotenv>=0.21.0          # carga variables de entorno desde .env (opcional, recomendado para claves API)
