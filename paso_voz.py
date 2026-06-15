@@ -196,15 +196,14 @@ def _grabar_voz(duracion: int = 5, sr: int = 16000):
         return None, None
 
 
-def _preview_clonacion(modelo_base, audio_ref, sr_ref):
+def _preview_clonacion(modelo_base, audio_ref, sr_ref, ref_text: str = ""):
     try:
         with Spinner("Generando preview con tu voz..."):
-            # Qwen3-TTS-Base espera una tupla (array, sample_rate) para numpy
             wavs, sr = modelo_base.generate_voice_clone(
                 text="Hola, soy SOFÍA. Esta es mi voz. ¿En qué puedo ayudarte hoy?",
                 language="Spanish",
                 ref_audio=(audio_ref, sr_ref),
-                ref_text="",
+                ref_text=ref_text,
             )
         return wavs[0], sr
     except Exception as e:
@@ -309,14 +308,23 @@ def configurar_voz() -> dict:
             info("Ejemplo: 'Buenos días. Hoy es un día perfecto para aprender.'")
 
             audio_ref = sr_ref = None
+            ref_text_grabacion = ""
             while True:
+                print(f"\n  {C.BOLD}¿Qué vas a decir en la grabación?{C.RESET}")
+                print("  Escribe el texto que vas a leer (para que el modelo sepa qué se dice).")
+                print("  Ejemplo: 'Buenos días. Hoy es un día perfecto para aprender cosas nuevas.'")
+                ref_text_grabacion = input("  Texto a leer: ").strip()
+                if not ref_text_grabacion:
+                    warn("El texto es obligatorio para la clonación de voz.")
+                    continue
+
                 audio_ref, sr_ref = _grabar_voz(duracion=5)
                 if audio_ref is None:
                     if input("  ¿Intentar de nuevo? [s/n]: ").strip().lower() != "s":
                         break
                     continue
 
-                audio_prev, sr_prev = _preview_clonacion(modelo_base, audio_ref, sr_ref)
+                audio_prev, sr_prev = _preview_clonacion(modelo_base, audio_ref, sr_ref, ref_text_grabacion)
                 if audio_prev is not None:
                     print(f"  {C.CYAN}Reproduciendo preview...{C.RESET}")
                     _reproducir(audio_prev, sr_prev)
@@ -330,9 +338,13 @@ def configurar_voz() -> dict:
                 try:
                     import soundfile as sf
                     sf.write(str(ref_path), audio_ref, sr_ref)
+                    # Guardar también el texto de referencia
+                    ref_text_path = ref_path.parent / "voz_referencia_texto.txt"
+                    ref_text_path.write_text(ref_text_grabacion, encoding="utf-8")
                     ok(f"Voz de referencia guardada: {ref_path}")
                     resultado["SOFIA_TTS_VOZ_MODO"] = "clon"
                     resultado["SOFIA_VOZ_REF_PATH"] = str(ref_path)
+                    resultado["SOFIA_VOZ_REF_TEXT"] = ref_text_grabacion
                 except Exception as e:
                     warn(f"No se pudo guardar: {e}")
                     resultado["SOFIA_TTS_VOZ_MODO"] = "preset"
@@ -384,8 +396,16 @@ def configurar_voz() -> dict:
                 if duracion_seg < 3:
                     warn("El audio es muy corto (menos de 3 segundos). La calidad puede ser baja.")
 
+                # Pedir transcripción del audio de referencia
+                print(f"\n  {C.BOLD}¿Qué dice el audio que acabas de cargar?{C.RESET}")
+                print("  Escribe el texto que se habla en la grabación.")
+                print("  Esto ayuda al modelo a clonar la voz con mayor precisión.")
+                ref_text_archivo = input("  Transcripción: ").strip()
+                if not ref_text_archivo:
+                    warn("Sin transcripción la calidad de clonación será menor.")
+
                 # Preview
-                audio_prev, sr_prev = _preview_clonacion(modelo_base, audio_ref, sr_ref)
+                audio_prev, sr_prev = _preview_clonacion(modelo_base, audio_ref, sr_ref, ref_text_archivo)
                 if audio_prev is not None:
                     print(f"  {C.CYAN}Reproduciendo preview con la voz clonada...{C.RESET}")
                     _reproducir(audio_prev, sr_prev)
@@ -399,15 +419,18 @@ def configurar_voz() -> dict:
                         break
 
             if audio_ref is not None:
-                # Guardar copia normalizada en data/
                 ref_path = Path(__file__).parent / "data" / "voz_referencia.wav"
                 ref_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     import soundfile as sf
                     sf.write(str(ref_path), audio_ref, sr_ref)
+                    # Guardar también el texto de referencia
+                    ref_text_path = ref_path.parent / "voz_referencia_texto.txt"
+                    ref_text_path.write_text(ref_text_archivo, encoding="utf-8")
                     ok(f"Referencia guardada: {ref_path}")
                     resultado["SOFIA_TTS_VOZ_MODO"] = "clon"
                     resultado["SOFIA_VOZ_REF_PATH"] = str(ref_path)
+                    resultado["SOFIA_VOZ_REF_TEXT"] = ref_text_archivo
                 except Exception as e:
                     warn(f"No se pudo guardar la referencia: {e}")
                     resultado["SOFIA_TTS_VOZ_MODO"] = "preset"

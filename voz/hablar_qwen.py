@@ -139,11 +139,15 @@ class HabladorQwen:
                     audio_ref, sr_ref = sf.read(str(_VOZ_REF), dtype="float32")
                     if audio_ref.ndim > 1:
                         audio_ref = audio_ref.mean(axis=1)
+                    # Leer texto de referencia guardado por el setup
+                    ref_text_path = _VOZ_REF.parent / "voz_referencia_texto.txt"
+                    ref_text = ref_text_path.read_text(encoding="utf-8").strip() \
+                               if ref_text_path.exists() else ""
                     wavs, sr = _modelo.generate_voice_clone(
                         text=texto,
                         language="Spanish",
                         ref_audio=(audio_ref, sr_ref),
-                        ref_text="",
+                        ref_text=ref_text,
                     )
                 else:
                     wavs, sr = _modelo.generate_custom_voice(
