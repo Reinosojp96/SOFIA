@@ -1,728 +1,591 @@
 """
-Instalador de SOFIA - Asistente de Voz
+SOFÍA — Instalador v2.0
 Ejecutar con: python setup.py
-Requiere: Python 3.10-3.12, conexión a internet, Git (opcional)
+
+Arquitectura de dos fases:
+  FASE 1 (Python del sistema): pasos 1-7
+    - Directorio, código, venv, hardware, preferencias, dependencias
+  FASE 2 (Python del venv):   pasos 8-13
+    - Modelos, voz, .env, acceso directo, test
+    - Invocada automáticamente por fase 1 vía subprocess
+
+Requiere: Python 3.10-3.12
 """
 
-import os
-import sys
-import subprocess
-import platform
-import shutil
-import threading
-import time
-import json
+import os, sys, subprocess, platform, shutil, threading, time, json, argparse
 from pathlib import Path
-# paso_voz se importa después de instalar dependencias
 
 # ─────────────────────────────────────────────
-# Compatibilidad mínima
+# Verificación de versión (solo en fase 1)
 # ─────────────────────────────────────────────
-if sys.version_info < (3, 10) or sys.version_info >= (3, 13):
-    print(f"[ERROR] SOFIA requiere Python 3.10-3.12.")
-    print(f"        Tienes Python {sys.version_info.major}.{sys.version_info.minor}")
-    print("        Descarga Python 3.12 en https://python.org/downloads")
-    sys.exit(1)
+if "--fase2" not in sys.argv:
+    if sys.version_info < (3, 10) or sys.version_info >= (3, 13):
+        print(f"[ERROR] SOFIA requiere Python 3.10-3.12.")
+        print(f"        Tienes Python {sys.version_info.major}.{sys.version_info.minor}")
+        print("        Descarga Python 3.12 en https://python.org/downloads")
+        sys.exit(1)
 
 IS_WIN = platform.system() == "Windows"
 
 # ─────────────────────────────────────────────
-# Colores para terminal
+# Colores
 # ─────────────────────────────────────────────
 class C:
-    RESET  = "\033[0m"
-    BOLD   = "\033[1m"
-    GREEN  = "\033[92m"
-    YELLOW = "\033[93m"
-    RED    = "\033[91m"
-    CYAN   = "\033[96m"
-    BLUE   = "\033[94m"
+    RESET = "\033[0m"; BOLD = "\033[1m"
+    GREEN = "\033[92m"; YELLOW = "\033[93m"
+    RED = "\033[91m"; CYAN = "\033[96m"; BLUE = "\033[94m"
 
 def ok(msg):    print(f"{C.GREEN}  ✓ {msg}{C.RESET}")
 def info(msg):  print(f"{C.CYAN}  ℹ {msg}{C.RESET}")
 def warn(msg):  print(f"{C.YELLOW}  ⚠ {msg}{C.RESET}")
 def error(msg): print(f"{C.RED}  ✗ {msg}{C.RESET}")
-def titulo(msg):
+
+def titulo(n, msg):
     print(f"\n{C.BOLD}{C.BLUE}{'─'*55}")
-    print(f"  {msg}")
+    print(f"  PASO {n} — {msg}")
     print(f"{'─'*55}{C.RESET}")
 
 # ─────────────────────────────────────────────
-# Barra de progreso
+# Spinner
 # ─────────────────────────────────────────────
-class Progreso:
-    """Barra de progreso de terminal para descargas y procesos largos."""
-
-    def __init__(self, total: int = 0, descripcion: str = ""):
-        self.total = total
-        self.desc  = descripcion
-        self.actual = 0
-        self._activo = False
-        self._hilo   = None
-
-    def actualizar(self, n: int):
-        self.actual = n
-        self._dibujar()
-
-    def _dibujar(self):
-        ancho = 40
-        if self.total > 0:
-            porcentaje = min(self.actual / self.total, 1.0)
-            llenos = int(ancho * porcentaje)
-            barra = "█" * llenos + "░" * (ancho - llenos)
-            mb_actual = self.actual / 1_048_576
-            mb_total  = self.total  / 1_048_576
-            texto = f"\r  [{barra}] {porcentaje*100:.1f}%  {mb_actual:.0f}/{mb_total:.0f} MB"
-        else:
-            pos = int(time.time() * 5) % ancho
-            barra = " " * pos + "███" + " " * (ancho - pos - 3)
-            texto = f"\r  [{barra}]  {self.desc}"
-        print(texto, end="", flush=True)
-
-    def spinner(self, mensaje: str):
-        """Animación de espera para procesos sin progreso medible."""
+class Spinner:
+    def __init__(self, msg=""):
+        self._msg = msg; self._activo = False; self._hilo = None
+    def __enter__(self):
         frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
         self._activo = True
         def _loop():
             i = 0
             while self._activo:
-                print(f"\r  {C.CYAN}{frames[i % len(frames)]}{C.RESET} {mensaje}", end="", flush=True)
-                time.sleep(0.1)
-                i += 1
+                print(f"\r  {C.CYAN}{frames[i%len(frames)]}{C.RESET} {self._msg}", end="", flush=True)
+                time.sleep(0.1); i += 1
         self._hilo = threading.Thread(target=_loop, daemon=True)
         self._hilo.start()
-
-    def detener(self, exito: bool = True):
-        self._activo = False
-        if self._hilo:
-            self._hilo.join(timeout=0.5)
-        print()  # salto de línea
-
-    def __enter__(self):
         return self
-
     def __exit__(self, *_):
-        self.detener()
+        self._activo = False
+        if self._hilo: self._hilo.join(timeout=0.5)
+        print()
 
+# ─────────────────────────────────────────────
+# Barra de progreso para descargas
+# ─────────────────────────────────────────────
+class BarraProgreso:
+    def __init__(self, total=0):
+        self.total = total; self.actual = 0
+    def actualizar(self, n):
+        self.actual = n; self._dibujar()
+    def _dibujar(self):
+        ancho = 40
+        if self.total > 0:
+            pct = min(self.actual / self.total, 1.0)
+            llenos = int(ancho * pct)
+            barra = "█" * llenos + "░" * (ancho - llenos)
+            mb_a = self.actual / 1_048_576; mb_t = self.total / 1_048_576
+            print(f"\r  [{barra}] {pct*100:.1f}%  {mb_a:.0f}/{mb_t:.0f} MB", end="", flush=True)
 
 # ─────────────────────────────────────────────
 # Utilidades
 # ─────────────────────────────────────────────
-def ejecutar(cmd, descripcion="", mostrar_salida=False):
-    p = Progreso()
-    p.spinner(descripcion or " ".join(str(c) for c in cmd))
-    resultado = subprocess.run(
-        cmd,
-        capture_output=not mostrar_salida,
-        text=True,
-    )
-    p.detener(resultado.returncode == 0)
-    if resultado.returncode != 0 and not mostrar_salida:
-        warn(f"Salida de error:\n{resultado.stderr[:400]}")
-    return resultado.returncode == 0
+def ejecutar_en_venv(pip_o_python: Path, args: list, descripcion=""):
+    with Spinner(descripcion or " ".join(str(a) for a in args)):
+        r = subprocess.run([str(pip_o_python)] + args, capture_output=True, text=True)
+    if r.returncode != 0:
+        warn(f"Salida de error:\n{r.stderr[:300]}")
+    return r.returncode == 0
 
-
-def preguntar_si_no(pregunta: str, defecto: bool = True) -> bool:
-    sufijo = "[S/n]" if defecto else "[s/N]"
-    resp = input(f"\n  {pregunta} {sufijo}: ").strip().lower()
-    if not resp:
-        return defecto
-    return resp in ("s", "si", "sí", "y", "yes")
-
-
-def elegir(opciones: list[str], pregunta: str, defecto: int = 1) -> int:
+def elegir(opciones, pregunta, defecto=1):
     print(f"\n  {pregunta}")
     for i, op in enumerate(opciones, 1):
         marca = f" {C.GREEN}(defecto){C.RESET}" if i == defecto else ""
         print(f"    {i}. {op}{marca}")
     while True:
-        resp = input(f"  Elige [1-{len(opciones)}] (Enter={defecto}): ").strip()
-        if not resp:
-            return defecto
-        if resp.isdigit() and 1 <= int(resp) <= len(opciones):
-            return int(resp)
-        error("Opción inválida.")
+        r = input(f"  Elige [1-{len(opciones)}] (Enter={defecto}): ").strip()
+        if not r: return defecto
+        if r.isdigit() and 1 <= int(r) <= len(opciones): return int(r)
+        print("  Opción inválida.")
 
+def si_no(pregunta, defecto=True):
+    s = "[S/n]" if defecto else "[s/N]"
+    r = input(f"\n  {pregunta} {s}: ").strip().lower()
+    return defecto if not r else r in ("s","si","sí","y","yes")
 
 # ─────────────────────────────────────────────
-# PASO 1: Directorio de instalación
+# ════════════════════════════════════════════
+#  FASE 1 — corre con el Python del sistema
+# ════════════════════════════════════════════
 # ─────────────────────────────────────────────
-def paso_directorio() -> Path:
-    titulo("PASO 1 — Directorio de instalación")
 
-    if IS_WIN:
-        defecto = Path(os.environ.get("ProgramData", "C:\\ProgramData")) / "SOFIA"
-    else:
-        defecto = Path.home() / "sofia"
-
-    info(f"Directorio por defecto: {defecto}")
-    entrada = input(f"\n  Directorio de instalación (Enter para usar el defecto): ").strip()
+def paso1_directorio() -> Path:
+    titulo(1, "Directorio de instalación")
+    defecto = Path(os.environ.get("ProgramData","C:\\ProgramData")) / "SOFIA" \
+              if IS_WIN else Path.home() / "sofia"
+    info(f"Por defecto: {defecto}")
+    entrada = input("\n  Directorio (Enter para el defecto): ").strip()
     directorio = Path(entrada) if entrada else defecto
-
     directorio.mkdir(parents=True, exist_ok=True)
     ok(f"Directorio: {directorio}")
     return directorio
 
 
-# ─────────────────────────────────────────────
-# PASO 2: Obtener el código (git clone o copiar)
-# ─────────────────────────────────────────────
-def paso_codigo(directorio: Path):
-    titulo("PASO 2 — Código fuente")
-
-    # Si setup.py está dentro del repo ya clonado, no clonamos de nuevo
+def paso2_codigo(directorio: Path):
+    titulo(2, "Código fuente")
     script_dir = Path(__file__).parent.resolve()
     if (script_dir / "main.py").exists():
-        info("El código ya está disponible en el directorio actual.")
+        info("Código disponible en el directorio actual.")
         if script_dir != directorio:
-            info(f"Copiando archivos a {directorio}...")
+            info(f"Copiando a {directorio}...")
             for item in script_dir.iterdir():
-                if item.name in {".git", "__pycache__", "venv", ".env"}:
-                    continue
-                destino = directorio / item.name
-                if item.is_dir():
-                    shutil.copytree(item, destino, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(item, destino)
+                if item.name in {".git","__pycache__","venv",".env"}: continue
+                dst = directorio / item.name
+                if item.is_dir(): shutil.copytree(item, dst, dirs_exist_ok=True)
+                else: shutil.copy2(item, dst)
             ok("Archivos copiados.")
         return
 
-    # Intentar con git
-    git_url = "https://github.com/TU_USUARIO/SOFIA.git"  # ← cambia por tu repo real
-    if shutil.which("git"):
-        if preguntar_si_no(f"¿Clonar desde GitHub ({git_url})?", defecto=True):
-            exito = ejecutar(
-                ["git", "clone", git_url, str(directorio)],
-                "Clonando repositorio..."
-            )
-            if exito:
-                ok("Repositorio clonado.")
-                return
-            else:
-                error("No se pudo clonar. Verifica la URL o tu conexión.")
+    git_url = "https://github.com/TU_USUARIO/SOFIA.git"
+    if shutil.which("git") and si_no(f"¿Clonar desde GitHub ({git_url})?"):
+        with Spinner("Clonando repositorio..."):
+            r = subprocess.run(["git","clone",git_url,str(directorio)],
+                               capture_output=True, text=True)
+        if r.returncode == 0: ok("Repositorio clonado.")
+        else: error("No se pudo clonar. Descarga el ZIP manualmente.")
     else:
-        warn("Git no está instalado. Descarga el ZIP manualmente desde GitHub.")
-        info(f"URL: {git_url}")
-        input("  Extrae el ZIP en el directorio de instalación y presiona Enter...")
+        warn("Descarga el ZIP desde GitHub, extráelo en el directorio de instalación.")
+        input("  Presiona Enter cuando esté listo...")
 
 
-# ─────────────────────────────────────────────
-# PASO 3: Entorno virtual
-# ─────────────────────────────────────────────
-def paso_venv(directorio: Path) -> Path:
-    titulo("PASO 3 — Entorno virtual (venv)")
-
+def paso3_venv(directorio: Path):
+    titulo(3, "Entorno virtual (venv)")
     venv_dir = directorio / "venv"
     if venv_dir.exists():
         info("El venv ya existe.")
     else:
-        exito = ejecutar(
-            [sys.executable, "-m", "venv", str(venv_dir)],
-            "Creando entorno virtual..."
-        )
-        if not exito:
+        with Spinner("Creando venv..."):
+            r = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)],
+                               capture_output=True, text=True)
+        if r.returncode != 0:
             error("No se pudo crear el venv.")
             sys.exit(1)
         ok("Venv creado.")
-
     if IS_WIN:
         python = venv_dir / "Scripts" / "python.exe"
         pip    = venv_dir / "Scripts" / "pip.exe"
     else:
         python = venv_dir / "bin" / "python"
-        pip    = venv_dir / "bin" / "pip"
-
+        pip    = venv_dir / "bin"   / "pip"
     ok(f"Python del venv: {python}")
     return python, pip
 
 
-# ─────────────────────────────────────────────
-# PASO 4: Detección de hardware
-# ─────────────────────────────────────────────
-def paso_hardware(pip: Path) -> dict:
-    titulo("PASO 4 — Detección de hardware")
-
-    hardware = {
-        "gpu_nombre": None,
-        "gpu_vram_gb": 0,
-        "ram_gb": 0,
-        "cpu_nucleos": os.cpu_count() or 4,
-        "espacio_gb": 0,
-        "cuda_version": None,
-        "cuda_whl": "cu126",
-    }
-
-    # RAM
-    try:
-        if IS_WIN:
-            resultado = subprocess.run(
-                ["wmic", "ComputerSystem", "get", "TotalPhysicalMemory", "/value"],
-                capture_output=True, text=True
-            )
-            for linea in resultado.stdout.split("\n"):
-                if "TotalPhysicalMemory" in linea:
-                    bytes_ram = int(linea.split("=")[1].strip())
-                    hardware["ram_gb"] = round(bytes_ram / 1_073_741_824, 1)
-        else:
-            with open("/proc/meminfo") as f:
-                for linea in f:
-                    if "MemTotal" in linea:
-                        kb = int(linea.split()[1])
-                        hardware["ram_gb"] = round(kb / 1_048_576, 1)
-    except Exception:
-        pass
-
-    # GPU y CUDA vía nvidia-smi
-    try:
-        resultado = subprocess.run(
-            ["nvidia-smi",
-             "--query-gpu=name,memory.total",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True
-        )
-        if resultado.returncode == 0:
-            linea = resultado.stdout.strip().split("\n")[0]
-            nombre, vram_mb = linea.split(",")
-            hardware["gpu_nombre"] = nombre.strip()
-            hardware["gpu_vram_gb"] = round(int(vram_mb.strip()) / 1024, 1)
-
-        # Versión de CUDA
-        resultado2 = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
-        for linea in resultado2.stdout.split("\n"):
-            if "CUDA Version" in linea:
-                ver = linea.split("CUDA Version:")[-1].strip().split()[0]
-                hardware["cuda_version"] = ver
-                mayor, menor = ver.split(".")[:2]
-                v = int(mayor) * 100 + int(menor) * 10
-                if v >= 1280:
-                    hardware["cuda_whl"] = "cu128"
-                elif v >= 1260:
-                    hardware["cuda_whl"] = "cu126"
-                elif v >= 1240:
-                    hardware["cuda_whl"] = "cu124"
-                else:
-                    hardware["cuda_whl"] = "cu118"
-    except Exception:
-        pass
-
-    # Espacio disponible en disco
+def paso4_hardware_basico() -> dict:
+    """Detección SIN torch ni psutil — solo herramientas del sistema."""
+    titulo(4, "Detección de hardware")
+    hw = {"gpu": None, "vram_gb": 0, "ram_gb": 0,
+          "nucleos": os.cpu_count() or 4, "espacio_gb": 0,
+          "cuda": None, "cuda_whl": "cu126"}
+    # CPU / espacio
     try:
         stat = shutil.disk_usage(str(Path.home()))
-        hardware["espacio_gb"] = round(stat.free / 1_073_741_824, 1)
-    except Exception:
-        pass
-
-    # Mostrar resumen
-    info(f"CPU: {hardware['cpu_nucleos']} núcleos")
-    info(f"RAM: {hardware['ram_gb']} GB")
-    if hardware["gpu_nombre"]:
-        info(f"GPU: {hardware['gpu_nombre']} — {hardware['gpu_vram_gb']} GB VRAM")
-        info(f"CUDA: {hardware['cuda_version']} → tag PyTorch: {hardware['cuda_whl']}")
-    else:
-        warn("No se detectó GPU Nvidia. Solo se instalarán componentes CPU.")
-    info(f"Espacio libre: {hardware['espacio_gb']} GB")
-
-    if hardware["espacio_gb"] < 5:
-        warn("Menos de 5 GB libres. La instalación completa puede fallar.")
-
-    return hardware
-
-
-# ─────────────────────────────────────────────
-# PASO 5: Preferencias del usuario
-# ─────────────────────────────────────────────
-def paso_preferencias(hardware: dict) -> dict:
-    titulo("PASO 5 — Preferencias")
-
-    prefs = {}
-
-    # Nombre
-    nombre = input("\n  ¿Cómo te llamas? (para el saludo): ").strip()
-    prefs["nombre"] = nombre or "Usuario"
-
-    # Ciudad
-    ciudad = input("  Ciudad para el clima por defecto [Ibague]: ").strip()
-    prefs["ciudad"] = ciudad or "Ibague"
-
-    # Motor de voz
-    tiene_gpu = hardware["gpu_nombre"] is not None
-    tiene_vram = hardware["gpu_vram_gb"] >= 3.5
-
-    print(f"\n  {C.BOLD}Voz de SOFÍA:{C.RESET}")
-    if tiene_gpu and tiene_vram:
-        opciones_tts = [
-            "pyttsx3 — voz estándar del sistema (sin GPU, siempre funciona)",
-            f"Qwen3-TTS 0.6B — voz natural con IA (GPU: {hardware['gpu_nombre']}, ~1.2 GB)",
-        ]
-        idx_tts = elegir(opciones_tts, "¿Qué motor de voz prefieres?", defecto=2)
-    else:
-        if tiene_gpu:
-            warn(f"Tu GPU tiene {hardware['gpu_vram_gb']} GB VRAM. Qwen3-TTS necesita ~3.5 GB.")
+        hw["espacio_gb"] = round(stat.free / 1_073_741_824, 1)
+    except Exception: pass
+    # RAM via PowerShell (más confiable que wmic en Win11)
+    try:
+        if IS_WIN:
+            r = subprocess.run(
+                ["powershell","-Command",
+                 "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"],
+                capture_output=True, text=True, timeout=8)
+            val = r.stdout.strip()
+            if val.isdigit():
+                hw["ram_gb"] = round(int(val) / 1_073_741_824, 1)
         else:
-            warn("Sin GPU Nvidia, Qwen3-TTS no está disponible.")
-        info("Usando pyttsx3 (voz estándar).")
-        idx_tts = 1
-        opciones_tts = ["pyttsx3"]
+            with open("/proc/meminfo") as f:
+                for l in f:
+                    if "MemTotal" in l:
+                        hw["ram_gb"] = round(int(l.split()[1]) / 1_048_576, 1); break
+    except Exception: pass
+    # GPU via nvidia-smi
+    try:
+        r = subprocess.run(
+            ["nvidia-smi","--query-gpu=name,memory.total","--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=6)
+        if r.returncode == 0:
+            nombre, vram_mb = r.stdout.strip().split("\n")[0].split(",")
+            hw["gpu"]     = nombre.strip()
+            hw["vram_gb"] = round(int(vram_mb.strip()) / 1024, 1)
+        # CUDA version
+        r2 = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=6)
+        for l in r2.stdout.split("\n"):
+            if "CUDA Version" in l:
+                ver = l.split("CUDA Version:")[-1].strip().split()[0]
+                hw["cuda"] = ver
+                maj, mn = ver.split(".")[:2]
+                v = int(maj)*100 + int(mn)*10
+                hw["cuda_whl"] = "cu128" if v>=1280 else "cu126" if v>=1260 \
+                                  else "cu124" if v>=1240 else "cu118"
+    except Exception: pass
+    # Mostrar
+    info(f"CPU: {hw['nucleos']} núcleos")
+    info(f"RAM: {hw['ram_gb']} GB" + (" (verificando con psutil en paso 6)" if hw["ram_gb"]==0 else ""))
+    if hw["gpu"]:
+        info(f"GPU: {hw['gpu']} — {hw['vram_gb']} GB VRAM")
+        info(f"CUDA: {hw['cuda']} → PyTorch: {hw['cuda_whl']}")
+    else:
+        warn("Sin GPU Nvidia detectada.")
+    info(f"Espacio libre: {hw['espacio_gb']} GB")
+    return hw
 
-    prefs["tts"] = "qwen" if idx_tts == 2 else "pyttsx3"
 
-    if prefs["tts"] == "qwen":
-        voces = ["Lucia", "Isabella", "Valentina", "Sofia", "Diego", "Alejandro"]
-        idx_voz = elegir(voces, "Voz para SOFÍA (español nativo):", defecto=1)
-        prefs["voz_speaker"] = voces[idx_voz - 1]
+def paso5_preferencias(hw: dict) -> dict:
+    titulo(5, "Preferencias")
+    p = {}
+    p["nombre"] = input("\n  ¿Cómo te llamas? (para el saludo): ").strip() or "Usuario"
+    ciudad = input("  Ciudad para el clima [Ibague]: ").strip()
+    p["ciudad"] = ciudad or "Ibague"
 
-        instruccion = input(
-            "  Estilo de voz (Enter para defecto 'tono cálido y profesional'): "
-        ).strip()
-        prefs["voz_instruccion"] = instruccion or \
-            "Habla con tono cálido y profesional, ritmo fluido, acento neutro latinoamericano."
+    tiene_gpu  = hw["gpu"] is not None
+    tiene_vram = hw["vram_gb"] >= 3.5
 
-    # Micrófono
-    mic = input(
-        "\n  Nombre (o parte) de tu micrófono externo\n"
-        "  (deja vacío para usar el micrófono por defecto del sistema): "
-    ).strip()
-    prefs["microfono"] = mic
+    print(f"\n  {C.BOLD}Motor de voz:{C.RESET}")
+    if tiene_gpu and tiene_vram:
+        idx = elegir([
+            "pyttsx3 — voz estándar del sistema (sin GPU, siempre funciona)",
+            f"Qwen3-TTS 0.6B — voz natural con IA (GPU: {hw['gpu']}, ~1.2 GB)",
+        ], "¿Qué motor prefieres?", defecto=2)
+    else:
+        if tiene_gpu: warn(f"Tu GPU tiene {hw['vram_gb']} GB VRAM (mínimo 3.5 GB para Qwen-TTS).")
+        else: warn("Sin GPU Nvidia, Qwen-TTS no disponible.")
+        info("Se usará pyttsx3.")
+        idx = 1
+    p["tts"] = "qwen" if idx == 2 else "pyttsx3"
 
-    # Palabra de activación
-    wake = input(
-        "\n  Palabra de activación [sofia]: "
-    ).strip().lower()
-    prefs["wake_word"] = wake or "sofia"
-
-    return prefs
+    mic = input("\n  Nombre de tu micrófono externo (vacío = micrófono por defecto): ").strip()
+    p["mic"] = mic
+    wake = input("  Palabra de activación [sofia]: ").strip().lower()
+    p["wake"] = wake or "sofia"
+    return p
 
 
-# ─────────────────────────────────────────────
-# PASO 6: Instalación de dependencias
-# ─────────────────────────────────────────────
-def paso_dependencias(pip: Path, hardware: dict, prefs: dict):
-    titulo("PASO 6 — Instalación de dependencias")
+def paso6_dependencias(pip: Path, hw: dict, prefs: dict):
+    titulo(6, "Instalación de dependencias")
+    info("Instalando psutil primero para verificar hardware...")
+    ejecutar_en_venv(pip, ["install", "psutil"], "pip install psutil...")
 
-    req_path = Path(__file__).parent / "requirements.txt"
+    # Re-detectar RAM con psutil si quedó en 0
+    if hw["ram_gb"] == 0:
+        try:
+            r = subprocess.run(
+                [str(pip.parent / ("python.exe" if IS_WIN else "python")),
+                 "-c", "import psutil; print(psutil.virtual_memory().total)"],
+                capture_output=True, text=True)
+            val = r.stdout.strip()
+            if val.isdigit():
+                hw["ram_gb"] = round(int(val) / 1_073_741_824, 1)
+                ok(f"RAM detectada con psutil: {hw['ram_gb']} GB")
+        except Exception: pass
 
-    # PyTorch con CUDA si hay GPU
-    if hardware["gpu_nombre"]:
-        whl = hardware["cuda_whl"]
-        torch_url = f"https://download.pytorch.org/whl/{whl}"
-        info(f"Instalando PyTorch con {whl}...")
-        ejecutar(
-            [str(pip), "install", "torch", "torchaudio",
-             "--index-url", torch_url],
-            f"pip install torch torchaudio ({whl})..."
-        )
+    # PyTorch
+    if hw["gpu"]:
+        whl = hw["cuda_whl"]
+        info(f"Instalando PyTorch con CUDA ({whl})...")
+        ejecutar_en_venv(pip,
+            ["install", "torch", "torchaudio",
+             "--index-url", f"https://download.pytorch.org/whl/{whl}"],
+            f"pip install torch torchaudio ({whl})...")
     else:
         info("Instalando PyTorch CPU...")
-        ejecutar(
-            [str(pip), "install", "torch", "torchaudio"],
-            "pip install torch torchaudio (CPU)..."
-        )
+        ejecutar_en_venv(pip, ["install", "torch", "torchaudio"],
+                         "pip install torch torchaudio (CPU)...")
 
-    # Qwen TTS si se eligió
+    # Qwen-TTS si se eligió
     if prefs["tts"] == "qwen":
-        info("Instalando qwen-tts y soundfile...")
-        ejecutar(
-            [str(pip), "install", "qwen-tts", "soundfile"],
-            "pip install qwen-tts soundfile..."
-        )
+        ejecutar_en_venv(pip, ["install", "qwen-tts", "soundfile"],
+                         "pip install qwen-tts soundfile...")
 
-    # Requirements base
-    if req_path.exists():
-        info("Instalando requirements.txt...")
-        ejecutar(
-            [str(pip), "install", "-r", str(req_path)],
-            "pip install -r requirements.txt..."
-        )
+    # PyQt6 (siempre necesario para la UI)
+    ejecutar_en_venv(pip, ["install", "PyQt6"], "pip install PyQt6...")
+
+    # Requirements del proyecto
+    req = Path(__file__).parent / "requirements.txt"
+    if req.exists():
+        ejecutar_en_venv(pip, ["install", "-r", str(req)],
+                         "pip install -r requirements.txt...")
     else:
-        # Dependencias mínimas hardcodeadas como fallback
-        paquetes = [
-            "faster-whisper", "sounddevice", "numpy",
-            "pyttsx3", "requests", "llama-cpp-python",
-            "PyQt6", "python-dotenv",
-        ]
-        ejecutar(
-            [str(pip), "install"] + paquetes,
-            "Instalando dependencias base..."
-        )
-
+        paquetes = ["faster-whisper","sounddevice","numpy","pyttsx3",
+                    "requests","llama-cpp-python","python-dotenv","pydub"]
+        ejecutar_en_venv(pip, ["install"] + paquetes,
+                         "Instalando dependencias base...")
     ok("Dependencias instaladas.")
 
 
+def _guardar_estado(directorio: Path, hw: dict, prefs: dict):
+    """Guarda hw + prefs en un JSON temporal para pasarlos a fase 2."""
+    estado = {"hw": hw, "prefs": prefs}
+    ruta = directorio / ".setup_state.json"
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(estado, f, ensure_ascii=False)
+    return ruta
+
+
+def fase1():
+    print(f"\n{C.BOLD}{C.BLUE}{'='*55}")
+    print("       SOFÍA — Instalador v2.0")
+    print(f"{'='*55}{C.RESET}")
+    info(f"Python {sys.version_info.major}.{sys.version_info.minor} · {platform.system()}")
+
+    directorio = paso1_directorio()
+    paso2_codigo(directorio)
+    python, pip = paso3_venv(directorio)
+    hw    = paso4_hardware_basico()
+    prefs = paso5_preferencias(hw)
+    paso6_dependencias(pip, hw, prefs)
+
+    estado_path = _guardar_estado(directorio, hw, prefs)
+
+    print(f"\n{C.BOLD}{C.BLUE}{'─'*55}")
+    print("  Dependencias listas. Continuando con el venv...")
+    print(f"{'─'*55}{C.RESET}\n")
+
+    # Relanzar este mismo script con el Python del venv en fase 2
+    r = subprocess.run(
+        [str(python), str(directorio / "setup.py"),
+         "--fase2", str(directorio), str(estado_path)],
+        env={**os.environ, "PYTHONPATH": str(directorio)},
+    )
+    sys.exit(r.returncode)
+
+
 # ─────────────────────────────────────────────
-# PASO 7: Descarga de modelos
+# ════════════════════════════════════════════
+#  FASE 2 — corre con el Python del VENV
+# ════════════════════════════════════════════
 # ─────────────────────────────────────────────
-def _descargar_hf(repo_id: str, destino: Path, descripcion: str):
-    """Descarga un modelo de HuggingFace Hub con barra de progreso."""
+
+def paso7_re_detectar_hw(hw: dict) -> dict:
+    """Verificación con psutil y torch ya disponibles en el venv."""
+    titulo(7, "Verificación de hardware (con venv)")
     try:
-        from huggingface_hub import snapshot_download
-        p = Progreso()
-        p.spinner(f"Descargando {descripcion}...")
-        ruta = snapshot_download(repo_id=repo_id, local_dir=str(destino))
-        p.detener(True)
-        ok(f"{descripcion} → {ruta}")
-        return True
-    except Exception as e:
-        error(f"Error descargando {descripcion}: {e}")
-        return False
-
-
-def _descargar_archivo(url: str, destino: Path, descripcion: str):
-    """Descarga un archivo con barra de progreso real."""
-    import urllib.request
-
-    destino.parent.mkdir(parents=True, exist_ok=True)
-    if destino.exists():
-        info(f"{descripcion} ya existe, omitiendo.")
-        return True
-
-    print(f"\n  Descargando {descripcion}...")
+        import psutil
+        hw["ram_gb"] = round(psutil.virtual_memory().total / 1_073_741_824, 1)
+        ok(f"RAM: {hw['ram_gb']} GB")
+    except Exception: pass
     try:
-        progreso = Progreso(descripcion=descripcion)
-
-        def callback(bloques, tam_bloque, tam_total):
-            progreso.total = tam_total
-            progreso.actualizar(bloques * tam_bloque)
-
-        urllib.request.urlretrieve(url, str(destino), reporthook=callback)
-        print()
-        ok(f"{descripcion} descargado.")
-        return True
-    except Exception as e:
-        error(f"Error: {e}")
-        return False
+        import torch
+        hw["cuda_disponible"] = torch.cuda.is_available()
+        if hw["cuda_disponible"]:
+            nombre = torch.cuda.get_device_name(0)
+            vram   = torch.cuda.get_device_properties(0).total_memory / 1_073_741_824
+            hw["gpu"]     = nombre
+            hw["vram_gb"] = round(vram, 1)
+            ok(f"GPU (torch): {nombre} — {hw['vram_gb']:.1f} GB VRAM")
+    except Exception: pass
+    return hw
 
 
-def paso_modelos(directorio: Path, hardware: dict, prefs: dict):
-    titulo("PASO 7 — Descarga de modelos")
-
+def paso8_modelos(directorio: Path, hw: dict, prefs: dict):
+    titulo(8, "Descarga de modelos")
+    import warnings; warnings.filterwarnings("ignore")
     data_dir = directorio / "data"
     data_dir.mkdir(exist_ok=True)
 
-    tiene_gpu   = hardware["gpu_nombre"] is not None
-    vram        = hardware["gpu_vram_gb"]
-    espacio     = hardware["espacio_gb"]
+    vram    = hw.get("vram_gb", 0)
+    ram     = hw.get("ram_gb", 8)
+    espacio = hw.get("espacio_gb", 20)
 
-    # ── Whisper (se descarga automático al primer uso via faster-whisper,
-    #    pero lo forzamos aquí para que no tarde en la primera ejecución)
-    modelo_whisper = "base" if vram >= 4 or not tiene_gpu else "tiny"
-    info(f"Modelo Whisper: {modelo_whisper}")
+    # ── Whisper ──
+    modelo_whisper = "base" if vram >= 4 else "tiny"
+    info(f"Descargando Whisper '{modelo_whisper}'...")
     try:
         from faster_whisper import WhisperModel
-        p = Progreso()
-        p.spinner(f"Descargando Whisper '{modelo_whisper}'...")
-        WhisperModel(modelo_whisper, device="cpu", compute_type="int8")
-        p.detener(True)
+        with Spinner(f"Whisper '{modelo_whisper}'..."):
+            WhisperModel(modelo_whisper, device="cpu", compute_type="int8")
         ok(f"Whisper '{modelo_whisper}' listo.")
     except Exception as e:
         warn(f"No se pudo predescargar Whisper: {e}")
 
-    # ── Silero-VAD (se descarga automático via torch.hub)
+    # ── Silero-VAD ──
     try:
         import torch
-        p = Progreso()
-        p.spinner("Descargando Silero-VAD...")
-        torch.hub.load("snakers4/silero-vad", "silero_vad", force_reload=False, onnx=False)
-        p.detener(True)
+        with Spinner("Silero-VAD..."):
+            torch.hub.load("snakers4/silero-vad","silero_vad",
+                           force_reload=False, onnx=False)
         ok("Silero-VAD listo.")
     except Exception as e:
         warn(f"No se pudo predescargar Silero-VAD: {e}")
 
-    # ── Qwen3-TTS
+    # ── Qwen3-TTS ──
     if prefs["tts"] == "qwen":
-        if preguntar_si_no("¿Descargar Qwen3-TTS 0.6B ahora? (~1.2 GB)", defecto=True):
-            _descargar_hf(
-                "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-                data_dir / "qwen3_tts",
-                "Qwen3-TTS 0.6B"
-            )
+        tts_dir = data_dir / "qwen3_tts"
+        if tts_dir.exists() and any(tts_dir.iterdir()):
+            info("Qwen3-TTS ya descargado.")
+        elif si_no("¿Descargar Qwen3-TTS 0.6B ahora? (~1.2 GB)", defecto=True):
+            try:
+                from huggingface_hub import snapshot_download
+                with Spinner("Descargando Qwen3-TTS 0.6B..."):
+                    snapshot_download(
+                        repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+                        local_dir=str(tts_dir)
+                    )
+                ok("Qwen3-TTS descargado.")
+            except Exception as e:
+                warn(f"Error: {e}. El modelo se descargará al primer arranque.")
 
-    # ── LLM (Qwen3-8B-Q4 ≈ 4.7 GB)
-    modelo_llm = directorio / "data" / "modelo.gguf"
+    # ── LLM ──
+    modelo_llm = data_dir / "modelo.gguf"
     if modelo_llm.exists():
-        info("Modelo LLM ya existe.")
+        info(f"Modelo LLM ya existe ({modelo_llm.stat().st_size//1_048_576} MB).")
     else:
-        # Recomendar según hardware
-        if vram >= 8 or (not tiene_gpu and hardware["ram_gb"] >= 16):
-            url_llm = "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf"
+        if vram >= 8 or (not hw.get("gpu") and ram >= 16):
+            url_llm  = "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf"
             desc_llm = "Qwen3-8B Q4 (~4.7 GB) — calidad alta"
         else:
-            url_llm = "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf"
+            url_llm  = "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf"
             desc_llm = "Qwen3-0.6B Q8 (~0.7 GB) — ligero"
 
+        info(f"LLM recomendado: {desc_llm}")
         if espacio < 6:
-            warn(f"Poco espacio ({espacio} GB). El modelo LLM puede no caber.")
+            warn(f"Solo {espacio} GB libres — el modelo puede no caber.")
 
-        info(f"Modelo LLM recomendado para tu hardware: {desc_llm}")
-        if preguntar_si_no(f"¿Descargar {desc_llm}?", defecto=True):
-            _descargar_archivo(url_llm, modelo_llm, "Modelo LLM")
+        if si_no(f"¿Descargar {desc_llm}?", defecto=True):
+            import urllib.request
+            barra = BarraProgreso()
+            def cb(bloques, tam, total):
+                barra.total = total; barra.actualizar(bloques * tam)
+            try:
+                urllib.request.urlretrieve(url_llm, str(modelo_llm), reporthook=cb)
+                print(); ok("Modelo LLM descargado.")
+            except Exception as e:
+                print(); error(f"Error: {e}")
+                if modelo_llm.exists(): modelo_llm.unlink()
 
     ok("Modelos listos.")
 
 
-# ─────────────────────────────────────────────
-# PASO 8: Generar .env
-# ─────────────────────────────────────────────
-def paso_env(directorio: Path, prefs: dict):
-    titulo("PASO 8 — Configuración (.env)")
+def paso9_configurar_voz(directorio: Path, prefs: dict) -> dict:
+    titulo(9, "Configuración de voz")
+    if prefs["tts"] != "qwen":
+        info("Motor pyttsx3 seleccionado — sin configuración de voz adicional.")
+        return {}
+    try:
+        sys.path.insert(0, str(directorio))
+        from paso_voz import configurar_voz
+        return configurar_voz()
+    except Exception as e:
+        warn(f"Configuración de voz omitida: {e}")
+        return {"SOFIA_TTS_VOZ_MODO": "preset", "SOFIA_VOZ_SPEAKER": "serena"}
 
+
+def paso10_env(directorio: Path, prefs: dict, config_voz: dict):
+    titulo(10, "Generando .env")
     lineas = [
         f"SOFIA_USER_NAME={prefs['nombre']}",
         f"SOFIA_CIUDAD={prefs['ciudad']}",
         f"SOFIA_TTS_MOTOR={prefs['tts']}",
-        f"SOFIA_WAKE_WORD={prefs['wake_word']}",
+        f"SOFIA_WAKE_WORD={prefs['wake']}",
     ]
-
-    if prefs.get("microfono"):
-        lineas.append(f"SOFIA_MIC_NAME={prefs['microfono']}")
+    if prefs.get("mic"):
+        lineas.append(f"SOFIA_MIC_NAME={prefs['mic']}")
 
     if prefs["tts"] == "qwen":
-        modo = prefs.get("SOFIA_TTS_VOZ_MODO", "preset")
+        modo = config_voz.get("SOFIA_TTS_VOZ_MODO", "preset")
         lineas.append(f"SOFIA_TTS_VOZ_MODO={modo}")
         if modo == "preset":
-            lineas.append(f"SOFIA_VOZ_SPEAKER={prefs.get('SOFIA_VOZ_SPEAKER', prefs.get('voz_speaker', 'Lucia'))}")
-        elif prefs.get("VOZ_REF_PATH"):
-            lineas.append(f"SOFIA_VOZ_REF_PATH={prefs['VOZ_REF_PATH']}")
-        instruccion = prefs.get("SOFIA_VOZ_INSTRUCCION", prefs.get("voz_instruccion", ""))
-        if instruccion:
-            lineas.append(f"SOFIA_VOZ_INSTRUCCION={instruccion}")
+            lineas.append(f"SOFIA_VOZ_SPEAKER={config_voz.get('SOFIA_VOZ_SPEAKER','serena')}")
+        if config_voz.get("SOFIA_VOZ_REF_PATH"):
+            lineas.append(f"SOFIA_VOZ_REF_PATH={config_voz['SOFIA_VOZ_REF_PATH']}")
+        if config_voz.get("SOFIA_VOZ_INSTRUCCION"):
+            lineas.append(f"SOFIA_VOZ_INSTRUCCION={config_voz['SOFIA_VOZ_INSTRUCCION']}")
 
     env_path = directorio / ".env"
     with open(env_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lineas) + "\n")
+    ok(f".env generado: {env_path}")
 
-    ok(f".env generado en {env_path}")
 
-
-# ─────────────────────────────────────────────
-# PASO 9: Acceso directo
-# ─────────────────────────────────────────────
-def paso_acceso_directo(directorio: Path):
-    titulo("PASO 9 — Acceso directo")
-
+def paso11_acceso_directo(directorio: Path):
+    titulo(11, "Acceso directo")
     if not IS_WIN:
-        info("Acceso directo solo disponible en Windows.")
+        info("Solo disponible en Windows por ahora.")
         return
-
-    try:
-        import winshell
-        from win32com.client import Dispatch
-
-        escritorio = Path(winshell.desktop())
-        acceso = escritorio / "SOFÍA.lnk"
-
-        shell = Dispatch("WScript.Shell")
-        shortcut = shell.CreateShortCut(str(acceso))
-        shortcut.Targetpath = str(directorio / "venv" / "Scripts" / "pythonw.exe")
-        shortcut.Arguments = f'"{directorio / "main.py"}"'
-        shortcut.WorkingDirectory = str(directorio)
-        shortcut.IconLocation = str(directorio / "ui" / "icon.ico") \
-            if (directorio / "ui" / "icon.ico").exists() else ""
-        shortcut.Description = "SOFÍA - Asistente de Voz"
-        shortcut.save()
-        ok(f"Acceso directo creado en el escritorio.")
-    except ImportError:
-        # winshell no siempre está disponible, crear .bat como alternativa
-        bat = directorio / "iniciar_sofia.bat"
-        with open(bat, "w") as f:
-            f.write(f'@echo off\n')
-            f.write(f'cd /d "{directorio}"\n')
-            f.write(f'call venv\\Scripts\\activate\n')
-            f.write(f'pythonw main.py\n')
-        ok(f"Script de inicio creado: {bat}")
-        info("Haz doble clic en 'iniciar_sofia.bat' para iniciar SOFÍA.")
-    except Exception as e:
-        warn(f"No se pudo crear el acceso directo: {e}")
+    bat = directorio / "iniciar_sofia.bat"
+    with open(bat, "w", encoding="utf-8") as f:
+        f.write(f'@echo off\n')
+        f.write(f'cd /d "{directorio}"\n')
+        f.write(f'call venv\\Scripts\\activate\n')
+        f.write(f'pythonw main.py\n')
+    ok(f"Script de inicio: {bat}")
+    info("Haz doble clic en 'iniciar_sofia.bat' para iniciar SOFÍA.")
 
 
-# ─────────────────────────────────────────────
-# PASO 10: Test rápido
-# ─────────────────────────────────────────────
-def paso_test(directorio: Path, prefs: dict):
-    titulo("PASO 10 — Verificación final")
-
-    errores = []
-
-    # Verificar archivos clave
-    archivos = ["main.py", "core/router.py", "skills/clima.py", "voz/escuchar.py", "voz/hablar.py"]
+def paso12_test(directorio: Path, prefs: dict):
+    titulo(12, "Verificación final")
+    archivos = ["main.py","core/router.py","skills/clima.py",
+                "voz/escuchar.py","voz/hablar.py"]
+    todos_ok = True
     for arch in archivos:
-        if not (directorio / arch).exists():
-            errores.append(f"Falta: {arch}")
-        else:
-            ok(f"Encontrado: {arch}")
+        if (directorio / arch).exists(): ok(f"Encontrado: {arch}")
+        else: error(f"Falta: {arch}"); todos_ok = False
 
-    # Verificar modelo LLM
-    modelo = directorio / "data" / "modelo.gguf"
-    if modelo.exists():
-        ok(f"Modelo LLM: {modelo.stat().st_size // 1_048_576} MB")
+    modelo_llm = directorio / "data" / "modelo.gguf"
+    if modelo_llm.exists():
+        ok(f"Modelo LLM: {modelo_llm.stat().st_size//1_048_576} MB")
     else:
-        warn("Modelo LLM no descargado. SOFÍA usará respuestas predeterminadas.")
+        warn("Modelo LLM no descargado. SOFÍA usará respuestas básicas.")
 
-    # Test de voz rápido
-    if preguntar_si_no("¿Hacer una prueba de voz?", defecto=True):
+    if si_no("¿Hacer prueba de voz?", defecto=True):
         try:
             if prefs["tts"] == "pyttsx3":
                 import pyttsx3
-                engine = pyttsx3.init()
-                engine.say("Hola, soy Sofía. Instalación completada.")
-                engine.runAndWait()
-                engine.stop()
-                ok("Test de voz pyttsx3 exitoso.")
+                e = pyttsx3.init(); e.say("Hola, instalación completada."); e.runAndWait(); e.stop()
+                ok("Test de voz exitoso.")
             else:
-                info("El test de Qwen-TTS se hará al iniciar SOFIA por primera vez.")
+                info("El test de Qwen-TTS ocurre al primer arranque de SOFIA.")
         except Exception as e:
-            warn(f"Test de voz fallido: {e}")
+            warn(f"Test de voz: {e}")
 
-    if errores:
-        error("Algunos archivos faltan. Verifica la instalación:")
-        for e in errores:
-            error(f"  {e}")
-    else:
+    if todos_ok:
         print(f"\n{C.GREEN}{C.BOLD}{'='*55}")
         print("  ¡SOFÍA instalada correctamente!")
-        print(f"  Para iniciar: python main.py")
+        print(f"  Inicia con: iniciar_sofia.bat")
+        print(f"  O con:      python main.py  (con el venv activo)")
         print(f"{'='*55}{C.RESET}\n")
+    else:
+        print(f"\n{C.YELLOW}  Instalación incompleta. Revisa los errores arriba.{C.RESET}\n")
+
+
+def fase2(directorio: Path, estado_path: Path):
+    import warnings; warnings.filterwarnings("ignore")
+
+    with open(estado_path, encoding="utf-8") as f:
+        estado = json.load(f)
+    hw    = estado["hw"]
+    prefs = estado["prefs"]
+
+    # Limpieza: borrar estado temporal
+    try: estado_path.unlink()
+    except Exception: pass
+
+    hw         = paso7_re_detectar_hw(hw)
+    paso8_modelos(directorio, hw, prefs)
+    config_voz = paso9_configurar_voz(directorio, prefs)
+    paso10_env(directorio, prefs, config_voz)
+    paso11_acceso_directo(directorio)
+    paso12_test(directorio, prefs)
 
 
 # ─────────────────────────────────────────────
-# MAIN
+# Entry point
 # ─────────────────────────────────────────────
-def main():
-    print(f"\n{C.BOLD}{C.BLUE}{'='*55}")
-    print("       SOFÍA — Instalador v1.0")
-    print(f"{'='*55}{C.RESET}\n")
-    info(f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
-    info(f"Sistema: {platform.system()} {platform.release()}")
-
-    directorio = paso_directorio()
-    paso_codigo(directorio)
-    python, pip = paso_venv(directorio)
-    hardware    = paso_hardware(pip)
-    prefs       = paso_preferencias(hardware)
-    paso_dependencias(pip, hardware, prefs)
-
-    # Configuración de voz — DESPUÉS de instalar dependencias
-    # porque necesita qwen-tts ya instalado para generar muestras
-    if prefs["tts"] == "qwen":
-        try:
-            sys.path.insert(0, str(directorio))
-            from paso_voz import configurar_voz
-            config_voz = configurar_voz()
-            # Guardar en prefs para que paso_env las incluya en .env
-            prefs.update(config_voz)
-        except Exception as e:
-            warn(f"Configuración de voz omitida: {e}")
-            prefs["voz_speaker"]     = "Lucia"
-            prefs["voz_instruccion"] = "Habla con tono cálido y profesional."
-
-    paso_modelos(directorio, hardware, prefs)
-    paso_env(directorio, prefs)
-    paso_acceso_directo(directorio)
-    paso_test(directorio, prefs)
-
-
 if __name__ == "__main__":
     try:
-        main()
+        if "--fase2" in sys.argv:
+            idx = sys.argv.index("--fase2")
+            directorio   = Path(sys.argv[idx + 1])
+            estado_path  = Path(sys.argv[idx + 2])
+            fase2(directorio, estado_path)
+        else:
+            fase1()
     except KeyboardInterrupt:
-        print(f"\n{C.YELLOW}  Instalación cancelada por el usuario.{C.RESET}")
+        print(f"\n{C.YELLOW}  Instalación cancelada.{C.RESET}")
         sys.exit(0)

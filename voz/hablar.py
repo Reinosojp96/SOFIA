@@ -1,28 +1,35 @@
 """
 Punto de entrada unificado para TTS.
+Lee SOFIA_TTS_MOTOR del .env: "pyttsx3" o "qwen"
 
-Lee SOFIA_TTS_MOTOR del .env:
-  "pyttsx3"  -> motor clásico, offline, funciona en CPU, voz robótica (defecto)
-  "qwen"     -> Qwen3-TTS 0.6B, requiere GPU Nvidia con 4GB+ VRAM, voz natural
-
-Si el motor preferido falla al cargar (GPU no disponible, modelo no
-descargado, etc.), cae automáticamente a pyttsx3 con un aviso.
-
-El resto del proyecto llama solo a:
-  from voz.hablar import hablar
-  hablar("texto")
+v3: suprime warnings de sox/flash-attn, usa hablar_qwen v2
 """
 
 import os
+import sys
+import warnings
+import logging
 import threading
+
+# Suprimir antes de cualquier import
+warnings.filterwarnings("ignore")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+# Silenciar sox y librosa antes de que se importen
+logging.getLogger("sox").setLevel(logging.CRITICAL)
+logging.getLogger("librosa").setLevel(logging.CRITICAL)
+logging.getLogger("audioread").setLevel(logging.CRITICAL)
+
+# Redirigir stderr temporalmente para silenciar el print de sox
+import io
+_stderr_orig = sys.stderr
+sys.stderr = io.StringIO()
 
 MOTOR = os.environ.get("SOFIA_TTS_MOTOR", "pyttsx3").lower().strip()
 
-# ---- Motor Qwen --------------------------------------------------------
-
-_qwen_motor  = None
-_qwen_ok     = False
-_qwen_lock   = threading.Lock()
+_qwen_motor = None
+_qwen_ok    = False
+_pyttsx3_lock = threading.Lock()
 
 
 def _init_qwen():
@@ -33,23 +40,21 @@ def _init_qwen():
         if h.disponible():
             _qwen_motor = h
             _qwen_ok    = True
-            print("[tts] Usando motor: Qwen3-TTS 0.6B (GPU)")
         else:
             raise RuntimeError("modelo no disponible")
     except Exception as e:
-        print(f"[tts] Qwen3-TTS no disponible ({e}), usando pyttsx3 como respaldo.")
+        sys.stderr = _stderr_orig  # restaurar para mostrar este warning
+        print(f"[tts] Qwen3-TTS no disponible ({e}), usando pyttsx3.")
         _qwen_ok = False
+    finally:
+        sys.stderr = _stderr_orig
 
 
 if MOTOR == "qwen":
     _init_qwen()
 else:
-    print("[tts] Usando motor: pyttsx3 (CPU, voz estándar)")
-
-
-# ---- Motor pyttsx3 -----------------------------------------------------
-
-_pyttsx3_lock = threading.Lock()
+    sys.stderr = _stderr_orig
+    print("[tts] Motor: pyttsx3")
 
 
 def _hablar_pyttsx3(texto: str):
@@ -65,16 +70,9 @@ def _hablar_pyttsx3(texto: str):
             print(f"[tts] Error pyttsx3: {e}")
 
 
-# ---- API pública -------------------------------------------------------
-
 def hablar(texto: str):
-    """
-    Convierte texto a voz usando el motor configurado.
-    Bloqueante: retorna cuando el audio termina de reproducirse.
-    """
     if not texto or not texto.strip():
         return
-
     if MOTOR == "qwen" and _qwen_ok and _qwen_motor:
         _qwen_motor.hablar(texto)
     else:

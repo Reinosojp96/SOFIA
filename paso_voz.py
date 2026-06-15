@@ -1,6 +1,11 @@
 """
 Módulo de configuración de voz para setup.py
 Se importa desde setup.py después de instalar dependencias.
+
+v2: 
+  - Opción de cargar grabación existente (.wav/.mp3)
+  - Voces se escuchan ANTES de elegir (en el propio setup)
+  - Mejor manejo de errores
 """
 
 import os
@@ -8,68 +13,45 @@ import sys
 import time
 import threading
 import tempfile
-import subprocess
 from pathlib import Path
 
 
-# ─────────────────────────────────────────────
-# Colores (duplicados aquí para que sea importable de forma independiente)
-# ─────────────────────────────────────────────
 class C:
-    RESET  = "\033[0m"; BOLD = "\033[1m"
-    GREEN  = "\033[92m"; YELLOW = "\033[93m"
-    RED    = "\033[91m"; CYAN = "\033[96m"
-    BLUE   = "\033[94m"
+    RESET = "\033[0m"; BOLD = "\033[1m"
+    GREEN = "\033[92m"; YELLOW = "\033[93m"
+    RED = "\033[91m"; CYAN = "\033[96m"; BLUE = "\033[94m"
 
 def ok(msg):   print(f"{C.GREEN}  ✓ {msg}{C.RESET}")
 def info(msg): print(f"{C.CYAN}  ℹ {msg}{C.RESET}")
 def warn(msg): print(f"{C.YELLOW}  ⚠ {msg}{C.RESET}")
 
-# ─────────────────────────────────────────────
-# Voces disponibles con descripción
-# ─────────────────────────────────────────────
+
+# Voces REALES del modelo Qwen3-TTS-0.6B-CustomVoice
+# (el 1.7B tiene Lucia/Sofia/etc, el 0.6B tiene estos IDs)
+# Usamos nombres amigables en pantalla pero el ID real para el modelo.
 VOCES = [
-    {
-        "id": "Lucia",
-        "descripcion": "Femenina · acento español neutro · cálida y profesional",
-        "muestra": "Hola, soy Lucía. Puedo ser la voz de tu asistente SOFÍA.",
-    },
-    {
-        "id": "Isabella",
-        "descripcion": "Femenina · tono suave y cercano · latinoamericana",
-        "muestra": "Hola, soy Isabella. Estoy lista para ayudarte en lo que necesites.",
-    },
-    {
-        "id": "Valentina",
-        "descripcion": "Femenina · energética y clara · joven",
-        "muestra": "Hola, soy Valentina. ¿En qué puedo ayudarte hoy?",
-    },
-    {
-        "id": "Sofia",
-        "descripcion": "Femenina · tono formal y preciso",
-        "muestra": "Hola, soy Sofía. Tu asistente de voz personal está lista.",
-    },
-    {
-        "id": "Diego",
-        "descripcion": "Masculina · tono profundo y seguro",
-        "muestra": "Hola, soy Diego. Dime en qué puedo ayudarte.",
-    },
-    {
-        "id": "Alejandro",
-        "descripcion": "Masculina · tono amigable y relajado",
-        "muestra": "Hola, soy Alejandro. Estoy aquí para lo que necesites.",
-    },
+    {"id": "serena",   "nombre": "Serena",   "descripcion": "Femenina · tono suave y cálido",
+     "muestra": "Hola, puedo ser la voz de tu asistente SOFÍA. ¿En qué puedo ayudarte hoy?"},
+    {"id": "vivian",   "nombre": "Vivian",   "descripcion": "Femenina · tono claro y profesional",
+     "muestra": "Hola, estoy lista para ayudarte en lo que necesites hoy."},
+    {"id": "ono_anna", "nombre": "Anna",     "descripcion": "Femenina · tono neutro y preciso",
+     "muestra": "Hola, tu asistente de voz personal está lista para ayudarte."},
+    {"id": "sohee",    "nombre": "Sohee",    "descripcion": "Femenina · tono joven y dinámico",
+     "muestra": "Hola, dime qué necesitas y lo resolvemos juntos ahora mismo."},
+    {"id": "aiden",    "nombre": "Aiden",    "descripcion": "Masculino · tono seguro y maduro",
+     "muestra": "Hola, dime en qué puedo ayudarte hoy."},
+    {"id": "dylan",    "nombre": "Dylan",    "descripcion": "Masculino · tono amigable y cercano",
+     "muestra": "Hola, estoy aquí para lo que necesites. ¿Cómo puedo ayudarte?"},
+    {"id": "ryan",     "nombre": "Ryan",     "descripcion": "Masculino · tono claro y directo",
+     "muestra": "Hola, soy tu asistente de voz. Dime cómo puedo ayudarte."},
 ]
 
 
-# ─────────────────────────────────────────────
-# Spinner simple (sin dependencia de setup.py)
-# ─────────────────────────────────────────────
 class Spinner:
-    def __init__(self, mensaje=""):
+    def __init__(self, msg=""):
         self._activo = False
-        self._hilo   = None
-        self._msg    = mensaje
+        self._msg = msg
+        self._hilo = None
 
     def __enter__(self):
         frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
@@ -77,10 +59,8 @@ class Spinner:
         def _loop():
             i = 0
             while self._activo:
-                print(f"\r  {C.CYAN}{frames[i % len(frames)]}{C.RESET} {self._msg}",
-                      end="", flush=True)
-                time.sleep(0.1)
-                i += 1
+                print(f"\r  {C.CYAN}{frames[i%len(frames)]}{C.RESET} {self._msg}", end="", flush=True)
+                time.sleep(0.1); i += 1
         self._hilo = threading.Thread(target=_loop, daemon=True)
         self._hilo.start()
         return self
@@ -92,19 +72,18 @@ class Spinner:
         print()
 
 
-# ─────────────────────────────────────────────
-# Carga lazy del modelo TTS
-# ─────────────────────────────────────────────
 _modelo_tts = None
+_modelo_base = None
 
-def _cargar_modelo_tts():
+
+def _cargar_modelo_custom():
     global _modelo_tts
     if _modelo_tts is not None:
         return _modelo_tts
     try:
         import torch
         from qwen_tts import Qwen3TTSModel
-        with Spinner("Cargando Qwen3-TTS para las muestras (solo esta vez)..."):
+        with Spinner("Cargando Qwen3-TTS para las muestras..."):
             _modelo_tts = Qwen3TTSModel.from_pretrained(
                 "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
                 device_map="cuda:0",
@@ -117,11 +96,27 @@ def _cargar_modelo_tts():
         return None
 
 
-# ─────────────────────────────────────────────
-# Reproducir audio
-# ─────────────────────────────────────────────
+def _cargar_modelo_base():
+    global _modelo_base
+    if _modelo_base is not None:
+        return _modelo_base
+    try:
+        import torch
+        from qwen_tts import Qwen3TTSModel
+        with Spinner("Cargando modelo de clonación..."):
+            _modelo_base = Qwen3TTSModel.from_pretrained(
+                "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+                device_map="cuda:0",
+                dtype=torch.bfloat16,
+            )
+        ok("Modelo de clonación listo.")
+        return _modelo_base
+    except Exception as e:
+        warn(f"No se pudo cargar modelo de clonación: {e}")
+        return None
+
+
 def _reproducir(audio, sr: int):
-    """Reproduce un array numpy de audio."""
     try:
         import sounddevice as sd
         sd.play(audio, samplerate=sr)
@@ -130,8 +125,7 @@ def _reproducir(audio, sr: int):
         warn(f"No se pudo reproducir: {e}")
 
 
-def _generar_muestra(modelo, voz: dict) -> tuple:
-    """Genera y devuelve (audio, sr) para una voz. None si falla."""
+def _generar_muestra(modelo, voz: dict):
     try:
         with Spinner(f"Generando muestra de {voz['id']}..."):
             wavs, sr = modelo.generate_custom_voice(
@@ -142,152 +136,142 @@ def _generar_muestra(modelo, voz: dict) -> tuple:
             )
         return wavs[0], sr
     except Exception as e:
-        warn(f"Error generando muestra: {e}")
+        warn(f"Error generando muestra de {voz['id']}: {e}")
         return None, None
 
 
-# ─────────────────────────────────────────────
-# Grabación de voz del usuario
-# ─────────────────────────────────────────────
-def _grabar_voz_usuario(duracion: int = 5, sr: int = 16000) -> tuple:
+def _convertir_a_numpy_wav(ruta: Path):
     """
-    Graba la voz del usuario durante 'duracion' segundos.
-    Devuelve (audio_numpy, sr) o (None, None) si falla.
+    Carga un archivo de audio (.wav o .mp3) y lo convierte a
+    numpy float32 a 16kHz (formato que necesita Qwen3-TTS para clonar).
     """
+    import numpy as np
+    try:
+        import soundfile as sf
+        audio, sr = sf.read(str(ruta), dtype="float32")
+        # Si es estéreo, convertir a mono
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        # Resamplear a 16kHz si es necesario
+        if sr != 16000:
+            try:
+                import torchaudio
+                import torch
+                tensor = torch.tensor(audio).unsqueeze(0)
+                resampleado = torchaudio.functional.resample(tensor, sr, 16000)
+                audio = resampleado.squeeze(0).numpy()
+                sr = 16000
+            except Exception:
+                warn("No se pudo resamplear. Se usará el audio tal cual (puede afectar calidad).")
+        return audio, sr
+    except Exception:
+        # Intentar con pydub para MP3
+        try:
+            from pydub import AudioSegment
+            seg = AudioSegment.from_file(str(ruta))
+            seg = seg.set_channels(1).set_frame_rate(16000)
+            muestras = np.array(seg.get_array_of_samples(), dtype=np.float32)
+            muestras /= 32768.0
+            return muestras, 16000
+        except Exception as e:
+            warn(f"No se pudo cargar el archivo de audio: {e}")
+            return None, None
+
+
+def _grabar_voz(duracion: int = 5, sr: int = 16000):
     try:
         import numpy as np
         import sounddevice as sd
-
         print(f"\n  {C.YELLOW}Habla durante {duracion} segundos cuando veas '▶ Grabando...'{C.RESET}")
         input("  Presiona Enter cuando estés listo...")
-
-        print(f"\n  {C.RED}▶ Grabando...{C.RESET}", end="", flush=True)
-
-        # Cuenta regresiva visual mientras graba
-        grabacion = sd.rec(
-            int(duracion * sr),
-            samplerate=sr,
-            channels=1,
-            dtype="float32",
-        )
+        grabacion = sd.rec(int(duracion * sr), samplerate=sr, channels=1, dtype="float32")
         for i in range(duracion, 0, -1):
             print(f"\r  {C.RED}▶ Grabando... {i}s{C.RESET}", end="", flush=True)
             time.sleep(1)
         sd.wait()
         print(f"\r  {C.GREEN}✓ Grabación completada.{C.RESET}       ")
-
-        audio = grabacion[:, 0]
-        return audio, sr
-
+        return grabacion[:, 0], sr
     except Exception as e:
         warn(f"Error durante la grabación: {e}")
         return None, None
 
 
-def _clonar_voz(modelo, audio_ref, sr_ref: int, texto_prueba: str) -> tuple:
-    """
-    Genera audio clonando la voz de referencia.
-    Devuelve (audio, sr) o (None, None).
-    """
+def _preview_clonacion(modelo_base, audio_ref, sr_ref):
     try:
-        import numpy as np
-
-        # Qwen3-TTS-Base acepta array numpy directamente como ref_audio
-        with Spinner("Clonando tu voz..."):
-            # Necesitamos el modelo Base para clonar, no el CustomVoice
-            import torch
-            from qwen_tts import Qwen3TTSModel
-            modelo_base = Qwen3TTSModel.from_pretrained(
-                "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-                device_map="cuda:0",
-                dtype=torch.bfloat16,
-            )
+        with Spinner("Generando preview con tu voz..."):
             wavs, sr = modelo_base.generate_voice_clone(
-                text=texto_prueba,
+                text="Hola, soy SOFÍA. Esta es mi voz. ¿En qué puedo ayudarte hoy?",
                 language="Spanish",
                 ref_audio=audio_ref,
-                ref_text="",   # sin transcripción de referencia
+                ref_text="",
             )
         return wavs[0], sr
     except Exception as e:
-        warn(f"Error clonando voz: {e}")
+        warn(f"Error generando preview: {e}")
         return None, None
 
 
 # ─────────────────────────────────────────────
-# Paso principal exportado a setup.py
+# Flujo principal exportado
 # ─────────────────────────────────────────────
+
 def configurar_voz() -> dict:
-    """
-    Flujo completo de configuración de voz.
-    Devuelve un dict con las claves para el .env:
-      {
-        "SOFIA_TTS_VOZ_MODO": "preset" | "clon",
-        "SOFIA_VOZ_SPEAKER": str,          # solo si modo=preset
-        "SOFIA_VOZ_INSTRUCCION": str,
-        # Si modo=clon, el audio de referencia se guarda en data/voz_referencia.wav
-      }
-    """
     print(f"\n{C.BOLD}{C.BLUE}{'─'*55}")
     print("  Configuración de voz de SOFÍA")
     print(f"{'─'*55}{C.RESET}")
 
-    info("Cargando el modelo de voz (esto puede tardar 1-2 minutos la primera vez)...")
-    modelo = _cargar_modelo_tts()
-
-    if modelo is None:
-        warn("No se pudo cargar el modelo TTS. Usando voz por defecto (Lucia).")
-        return {
-            "SOFIA_TTS_VOZ_MODO": "preset",
-            "SOFIA_VOZ_SPEAKER": "Lucia",
-            "SOFIA_VOZ_INSTRUCCION": "Habla con tono cálido y profesional.",
-        }
-
-    # ── Opción: escuchar voces predefinidas o clonar la propia
+    # ── Elegir modo ──────────────────────────
     print(f"\n  {C.BOLD}¿Qué tipo de voz quieres para SOFÍA?{C.RESET}")
-    print("    1. Elegir una voz de la lista (la puedes escuchar antes de decidir)")
-    print("    2. Clonar tu propia voz (graba 5 segundos y SOFÍA hablará como tú)")
+    print("    1. Elegir una voz de la lista (puedes escucharlas antes)")
+    print("    2. Clonar una voz — grabar ahora con el micrófono")
+    print("    3. Clonar una voz — usar grabación existente (.wav o .mp3)")
 
     while True:
-        resp = input("  Elige [1/2] (Enter=1): ").strip()
-        if resp in ("", "1"):
-            modo = "preset"
-            break
-        elif resp == "2":
-            modo = "clon"
-            break
-        print("  Opción inválida.")
+        resp = input("  Elige [1/2/3] (Enter=1): ").strip()
+        if resp in ("", "1"): modo = "preset"; break
+        elif resp == "2":     modo = "grabar";  break
+        elif resp == "3":     modo = "archivo"; break
+        else: print("  Opción inválida.")
 
-    resultado = {"SOFIA_TTS_VOZ_MODO": modo}
+    resultado = {}
 
     # ═══════════════════════════════════════════
-    # MODO PRESET: escuchar y elegir
+    # MODO PRESET
     # ═══════════════════════════════════════════
     if modo == "preset":
+        modelo = _cargar_modelo_custom()
+
         print(f"\n  {C.BOLD}Voces disponibles:{C.RESET}")
-        for i, voz in enumerate(VOCES, 1):
-            print(f"    {i}. {C.CYAN}{voz['id']}{C.RESET} — {voz['descripcion']}")
+        for i, v in enumerate(VOCES, 1):
+            nombre_display = v.get("nombre", v["id"])
+        print(f"    {i}. {C.CYAN}{nombre_display}{C.RESET} — {v['descripcion']}")
+
+        print(f"\n  {C.BOLD}Comandos:{C.RESET}")
+        print("    · Número (ej: 3)      → escuchar muestra de esa voz")
+        print("    · 'todas'             → escuchar todas en secuencia")
+        print("    · 'ok N' (ej: ok 2)   → confirmar la voz N")
 
         voz_elegida = None
         while True:
-            print("\n  Opciones:")
-            print("    · Escribe el número de una voz para escuchar la muestra")
-            print("    · Escribe 'ok N' para confirmar la voz N (ej: ok 2)")
-            print("    · Escribe 'todas' para escuchar todas en secuencia")
-
             cmd = input("\n  > ").strip().lower()
 
             if cmd == "todas":
+                if modelo is None:
+                    warn("Modelo no disponible, no se pueden generar muestras.")
+                    continue
                 for i, voz in enumerate(VOCES, 1):
-                    print(f"\n  [{i}/6] {voz['id']}...")
+                    print(f"\n  [{i}/{len(VOCES)}] {voz['id']}...")
                     audio, sr = _generar_muestra(modelo, voz)
                     if audio is not None:
                         _reproducir(audio, sr)
-                    time.sleep(0.5)
+                    time.sleep(0.3)
 
             elif cmd.isdigit() and 1 <= int(cmd) <= len(VOCES):
                 voz = VOCES[int(cmd) - 1]
-                print(f"\n  Reproduciendo muestra de {voz['id']}...")
+                if modelo is None:
+                    warn("Modelo no disponible para generar muestras.")
+                    continue
+                print(f"\n  Escuchando {voz['id']}...")
                 audio, sr = _generar_muestra(modelo, voz)
                 if audio is not None:
                     _reproducir(audio, sr)
@@ -298,77 +282,151 @@ def configurar_voz() -> dict:
                     idx = int(partes[1])
                     if 1 <= idx <= len(VOCES):
                         voz_elegida = VOCES[idx - 1]
-                        ok(f"Voz seleccionada: {voz_elegida['id']}")
+                        ok(f"Voz seleccionada: {voz_elegida.get('nombre', voz_elegida['id'])}")
                         break
                 print("  Formato: ok N  (ej: ok 3)")
+
+            elif cmd.isdigit():
+                print(f"  Número fuera de rango. Elige entre 1 y {len(VOCES)}.")
             else:
-                print("  No entendí. Escribe un número, 'ok N' o 'todas'.")
+                print("  No entendí. Escribe un número, 'todas' o 'ok N'.")
 
-        resultado["SOFIA_VOZ_SPEAKER"] = voz_elegida["id"]
+        resultado["SOFIA_TTS_VOZ_MODO"] = "preset"
+        resultado["SOFIA_VOZ_SPEAKER"]  = voz_elegida["id"]
 
     # ═══════════════════════════════════════════
-    # MODO CLON: grabar la voz del usuario
+    # MODO CLONAR — GRABAR
     # ═══════════════════════════════════════════
-    else:
-        info("Necesitas grabar al menos 5 segundos de tu voz, leyendo cualquier texto.")
-        info("Ejemplo: 'Buenos días. Hoy es un día perfecto para aprender cosas nuevas.'")
+    elif modo == "grabar":
+        modelo_base = _cargar_modelo_base()
+        if modelo_base is None:
+            warn("No se pudo cargar el modelo de clonación. Usando voz Lucia por defecto.")
+            resultado["SOFIA_TTS_VOZ_MODO"] = "preset"
+            resultado["SOFIA_VOZ_SPEAKER"]  = "Lucia"
+        else:
+            info("Graba 5 segundos de tu voz leyendo cualquier texto natural.")
+            info("Ejemplo: 'Buenos días. Hoy es un día perfecto para aprender.'")
 
-        audio_ref = None
-        sr_ref    = 16000
+            audio_ref = sr_ref = None
+            while True:
+                audio_ref, sr_ref = _grabar_voz(duracion=5)
+                if audio_ref is None:
+                    if input("  ¿Intentar de nuevo? [s/n]: ").strip().lower() != "s":
+                        break
+                    continue
 
-        while True:
-            audio_ref, sr_ref = _grabar_voz_usuario(duracion=5, sr=16000)
+                audio_prev, sr_prev = _preview_clonacion(modelo_base, audio_ref, sr_ref)
+                if audio_prev is not None:
+                    print(f"  {C.CYAN}Reproduciendo preview...{C.RESET}")
+                    _reproducir(audio_prev, sr_prev)
+                    if input("\n  ¿Te gusta? [S/n]: ").strip().lower() not in ("n","no"):
+                        break
+                info("Grabemos de nuevo.")
 
-            if audio_ref is None:
-                warn("La grabación falló. ¿Intentar de nuevo?")
-                if input("  [s/n]: ").strip().lower() != "s":
-                    warn("Usando voz Lucia por defecto.")
-                    resultado["SOFIA_VOZ_SPEAKER"] = "Lucia"
+            if audio_ref is not None:
+                ref_path = Path(__file__).parent / "data" / "voz_referencia.wav"
+                ref_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    import soundfile as sf
+                    sf.write(str(ref_path), audio_ref, sr_ref)
+                    ok(f"Voz de referencia guardada: {ref_path}")
+                    resultado["SOFIA_TTS_VOZ_MODO"] = "clon"
+                    resultado["SOFIA_VOZ_REF_PATH"] = str(ref_path)
+                except Exception as e:
+                    warn(f"No se pudo guardar: {e}")
                     resultado["SOFIA_TTS_VOZ_MODO"] = "preset"
-                    break
-                continue
-
-            # Generar preview con la voz clonada
-            print("\n  Generando preview con tu voz clonada...")
-            audio_preview, sr_preview = _clonar_voz(
-                modelo, audio_ref, sr_ref,
-                "Hola, soy SOFÍA. Esta es mi voz clonada."
-            )
-
-            if audio_preview is not None:
-                print(f"  {C.CYAN}Reproduciendo preview...{C.RESET}")
-                _reproducir(audio_preview, sr_preview)
-
-                resp = input("\n  ¿Te gusta cómo suena? [S/n]: ").strip().lower()
-                if resp not in ("n", "no"):
-                    # Guardar audio de referencia
-                    try:
-                        import soundfile as sf
-                        import numpy as np
-                        ref_path = Path(__file__).parent / "data" / "voz_referencia.wav"
-                        ref_path.parent.mkdir(parents=True, exist_ok=True)
-                        sf.write(str(ref_path), audio_ref, sr_ref)
-                        ok(f"Voz de referencia guardada en {ref_path}")
-                        resultado["VOZ_REF_PATH"] = str(ref_path)
-                    except Exception as e:
-                        warn(f"No se pudo guardar la referencia: {e}")
-                    break
-                else:
-                    info("Grabemos de nuevo.")
+                    resultado["SOFIA_VOZ_SPEAKER"]  = "Lucia"
             else:
-                warn("No se pudo generar el preview. Grabemos de nuevo.")
+                resultado["SOFIA_TTS_VOZ_MODO"] = "preset"
+                resultado["SOFIA_VOZ_SPEAKER"]  = "Lucia"
 
-    # ── Instrucción de estilo (aplica a ambos modos)
-    print(f"\n  {C.BOLD}Instrucción de estilo para la voz:{C.RESET}")
+    # ═══════════════════════════════════════════
+    # MODO CLONAR — ARCHIVO EXISTENTE
+    # ═══════════════════════════════════════════
+    elif modo == "archivo":
+        modelo_base = _cargar_modelo_base()
+        if modelo_base is None:
+            warn("No se pudo cargar el modelo de clonación. Usando voz Lucia.")
+            resultado["SOFIA_TTS_VOZ_MODO"] = "preset"
+            resultado["SOFIA_VOZ_SPEAKER"]  = "Lucia"
+        else:
+            info("Ingresa la ruta completa al archivo de audio (.wav o .mp3).")
+            info("El archivo debe tener al menos 3 segundos de voz limpia.")
+
+            audio_ref = sr_ref = None
+            while True:
+                ruta_str = input("\n  Ruta del archivo: ").strip().strip('"\'')
+                ruta = Path(ruta_str)
+
+                if not ruta.exists():
+                    warn(f"No se encontró el archivo: {ruta}")
+                    if input("  ¿Intentar con otra ruta? [s/n]: ").strip().lower() != "s":
+                        break
+                    continue
+
+                if ruta.suffix.lower() not in (".wav", ".mp3", ".ogg", ".flac", ".m4a"):
+                    warn("Formato no reconocido. Usa .wav, .mp3, .ogg, .flac o .m4a")
+                    continue
+
+                info(f"Cargando {ruta.name}...")
+                audio_ref, sr_ref = _convertir_a_numpy_wav(ruta)
+
+                if audio_ref is None:
+                    warn("No se pudo cargar el archivo.")
+                    if input("  ¿Intentar con otro archivo? [s/n]: ").strip().lower() != "s":
+                        break
+                    continue
+
+                duracion_seg = len(audio_ref) / sr_ref
+                info(f"Audio cargado: {duracion_seg:.1f} segundos a {sr_ref} Hz")
+
+                if duracion_seg < 3:
+                    warn("El audio es muy corto (menos de 3 segundos). La calidad puede ser baja.")
+
+                # Preview
+                audio_prev, sr_prev = _preview_clonacion(modelo_base, audio_ref, sr_ref)
+                if audio_prev is not None:
+                    print(f"  {C.CYAN}Reproduciendo preview con la voz clonada...{C.RESET}")
+                    _reproducir(audio_prev, sr_prev)
+
+                    if input("\n  ¿Te gusta cómo suena? [S/n]: ").strip().lower() not in ("n","no"):
+                        break
+                    info("Prueba con otro archivo.")
+                else:
+                    warn("No se pudo generar el preview.")
+                    if input("  ¿Usar este archivo de todas formas? [s/n]: ").strip().lower() == "s":
+                        break
+
+            if audio_ref is not None:
+                # Guardar copia normalizada en data/
+                ref_path = Path(__file__).parent / "data" / "voz_referencia.wav"
+                ref_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    import soundfile as sf
+                    sf.write(str(ref_path), audio_ref, sr_ref)
+                    ok(f"Referencia guardada: {ref_path}")
+                    resultado["SOFIA_TTS_VOZ_MODO"] = "clon"
+                    resultado["SOFIA_VOZ_REF_PATH"] = str(ref_path)
+                except Exception as e:
+                    warn(f"No se pudo guardar la referencia: {e}")
+                    resultado["SOFIA_TTS_VOZ_MODO"] = "preset"
+                    resultado["SOFIA_VOZ_SPEAKER"]  = "Lucia"
+            else:
+                resultado["SOFIA_TTS_VOZ_MODO"] = "preset"
+                resultado["SOFIA_VOZ_SPEAKER"]  = "Lucia"
+
+    # ── Instrucción de estilo ────────────────
+    print(f"\n  {C.BOLD}Instrucción de estilo:{C.RESET}")
     print("  Describe cómo quieres que hable SOFÍA.")
-    print("  Ejemplos:")
-    print("    · 'Habla despacio y con calma'")
-    print("    · 'Tono energético y juvenil'")
-    print("    · 'Voz formal y precisa, sin pausas largas'")
+    print("  Ejemplos: 'Habla despacio y con calma'")
+    print("            'Tono energético y juvenil'")
+    print("            'Voz formal y precisa'")
 
-    instruccion = input("\n  Tu instrucción (Enter para 'tono cálido y profesional'): ").strip()
+    instruccion = input(
+        "\n  Tu instrucción (Enter para 'tono cálido y profesional'): "
+    ).strip()
     resultado["SOFIA_VOZ_INSTRUCCION"] = instruccion or \
         "Habla con tono cálido y profesional, ritmo fluido, acento neutro latinoamericano."
 
-    print(f"\n  {C.GREEN}{C.BOLD}Configuración de voz completada.{C.RESET}")
+    ok("Configuración de voz completada.")
     return resultado
