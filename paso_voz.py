@@ -199,10 +199,11 @@ def _grabar_voz(duracion: int = 5, sr: int = 16000):
 def _preview_clonacion(modelo_base, audio_ref, sr_ref):
     try:
         with Spinner("Generando preview con tu voz..."):
+            # Qwen3-TTS-Base espera una tupla (array, sample_rate) para numpy
             wavs, sr = modelo_base.generate_voice_clone(
                 text="Hola, soy SOFÍA. Esta es mi voz. ¿En qué puedo ayudarte hoy?",
                 language="Spanish",
-                ref_audio=audio_ref,
+                ref_audio=(audio_ref, sr_ref),
                 ref_text="",
             )
         return wavs[0], sr

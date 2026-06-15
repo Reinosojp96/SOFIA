@@ -142,7 +142,7 @@ class HabladorQwen:
                     wavs, sr = _modelo.generate_voice_clone(
                         text=texto,
                         language="Spanish",
-                        ref_audio=audio_ref,
+                        ref_audio=(audio_ref, sr_ref),
                         ref_text="",
                     )
                 else:
