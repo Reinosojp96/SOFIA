@@ -57,7 +57,7 @@ IS_WIN = platform.system() == "Windows"
 
 # Forzar UTF-8 en la consola de Windows (evita UnicodeEncodeError con
 # caracteres del spinner como ⠸ ⠋ etc. en terminales con cp1252)
-if IS_WIN:
+if IS_WIN and sys.stdout is not None and getattr(sys.stdout, "isatty", lambda: False)():
     os.system("chcp 65001 > nul 2>&1")
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -251,9 +251,12 @@ def detectar_cuda() -> str:
 # ─────────────────────────────────────────────
 # PASO 2 — Descargar ZIP del repositorio
 # ─────────────────────────────────────────────
-def descargar_repo(destino_zip: Path) -> bool:
-    titulo("Descargando SOFÍA desde GitHub")
-    info(f"URL: {ZIP_URL}")
+def descargar_repo(destino_zip: Path, ui=None) -> bool:
+    if ui is None:
+        titulo("Descargando SOFÍA desde GitHub")
+        info(f"URL: {ZIP_URL}")
+    else:
+        ui.status("Descargando SOFÍA desde GitHub...")
 
     progreso = Progreso("repositorio")
     try:
@@ -275,30 +278,46 @@ def descargar_repo(destino_zip: Path) -> bool:
                     f.write(datos)
                     descargado += len(datos)
                     progreso.actual = descargado
-                    progreso._dibujar()
+                    if ui is None:
+                        progreso._dibujar()
+                    else:
+                        ui.progress(descargado, tam_total)
 
-        print()
-        ok(f"Repositorio descargado ({destino_zip.stat().st_size // 1024} KB)")
+        if ui is None:
+            print()
+            ok(f"Repositorio descargado ({destino_zip.stat().st_size // 1024} KB)")
+        else:
+            ui.log(f"Repositorio descargado ({destino_zip.stat().st_size // 1024} KB)")
         return True
 
     except urllib.error.URLError as e:
-        print()
-        error(f"No se pudo descargar: {e}")
-        error("Verifica tu conexión a internet e inténtalo de nuevo.")
+        if ui is None:
+            print()
+            error(f"No se pudo descargar: {e}")
+            error("Verifica tu conexión a internet e inténtalo de nuevo.")
+        else:
+            ui.log(f"No se pudo descargar: {e}. Verifica tu conexión a internet.", level="error")
         return False
     except Exception as e:
-        print()
-        error(f"Error inesperado: {e}")
+        if ui is None:
+            print()
+            error(f"Error inesperado: {e}")
+        else:
+            ui.log(f"Error inesperado: {e}", level="error")
         return False
 
 # ─────────────────────────────────────────────
 # PASO 3 — Extraer ZIP
 # ─────────────────────────────────────────────
-def extraer_repo(zip_path: Path, directorio: Path) -> bool:
-    titulo("Extrayendo archivos")
+def extraer_repo(zip_path: Path, directorio: Path, ui=None) -> bool:
+    if ui is None:
+        titulo("Extrayendo archivos")
+    else:
+        ui.status("Extrayendo archivos...")
 
     try:
-        with Spinner("Extrayendo..."):
+        ctx = Spinner("Extrayendo...") if ui is None else _nullcontext()
+        with ctx:
             with zipfile.ZipFile(zip_path, "r") as zf:
                 # El ZIP de GitHub tiene una carpeta raíz tipo "SOFIA-main/"
                 nombres = zf.namelist()
@@ -319,36 +338,55 @@ def extraer_repo(zip_path: Path, directorio: Path) -> bool:
                         with zf.open(miembro) as src, open(destino, "wb") as dst:
                             shutil.copyfileobj(src, dst)
 
-        ok(f"Archivos extraídos en {directorio}")
+        if ui is None:
+            ok(f"Archivos extraídos en {directorio}")
+        else:
+            ui.log(f"Archivos extraídos en {directorio}")
         return True
 
     except zipfile.BadZipFile:
-        error("El archivo descargado está corrupto. Inténtalo de nuevo.")
+        msg = "El archivo descargado está corrupto. Inténtalo de nuevo."
+        error(msg) if ui is None else ui.log(msg, level="error")
         return False
     except Exception as e:
-        error(f"Error al extraer: {e}")
+        msg = f"Error al extraer: {e}"
+        error(msg) if ui is None else ui.log(msg, level="error")
         return False
+
+
+class _nullcontext:
+    def __enter__(self): return self
+    def __exit__(self, *_): return False
 
 # ─────────────────────────────────────────────
 # PASO 4 — Crear venv
 # ─────────────────────────────────────────────
-def crear_venv(directorio: Path, python_sistema: Path):
-    titulo("Creando entorno virtual")
+def crear_venv(directorio: Path, python_sistema: Path, ui=None):
+    if ui is None:
+        titulo("Creando entorno virtual")
+    else:
+        ui.status("Creando entorno virtual...")
     venv_dir = directorio / "venv"
 
     if venv_dir.exists():
-        info("El venv ya existe, omitiendo.")
+        msg = "El venv ya existe, omitiendo."
+        info(msg) if ui is None else ui.log(msg)
     else:
-        with Spinner("Creando venv..."):
+        ctx = Spinner("Creando venv...") if ui is None else _nullcontext()
+        with ctx:
             r = subprocess.run(
                 [str(python_sistema), "-m", "venv", str(venv_dir)],
                 capture_output=True, text=True
             )
         if r.returncode != 0:
-            error("No se pudo crear el venv:")
-            error(r.stderr[:300])
-            sys.exit(1)
-        ok("Venv creado.")
+            if ui is None:
+                error("No se pudo crear el venv:")
+                error(r.stderr[:300])
+                sys.exit(1)
+            else:
+                ui.log(f"No se pudo crear el venv: {r.stderr[:300]}", level="error")
+                raise RuntimeError("No se pudo crear el venv")
+        ok("Venv creado.") if ui is None else ui.log("Venv creado.")
 
     if IS_WIN:
         python = venv_dir / "Scripts" / "python.exe"
@@ -357,59 +395,75 @@ def crear_venv(directorio: Path, python_sistema: Path):
         python = venv_dir / "bin" / "python"
         pip    = venv_dir / "bin" / "pip"
 
-    ok(f"Python: {python}")
+    ok(f"Python: {python}") if ui is None else ui.log(f"Python del venv: {python}")
     return python, pip
 
 # ─────────────────────────────────────────────
 # PASO 5 — Instalar dependencias base
 # ─────────────────────────────────────────────
-def instalar_dependencias(pip: Path, python: Path, cuda_tag: str):
-    titulo("Instalando dependencias base")
+def instalar_dependencias(pip: Path, python: Path, cuda_tag: str, ui=None):
+    if ui is None:
+        titulo("Instalando dependencias base")
+    else:
+        ui.status("Instalando dependencias base...")
 
     def pip_install(args, descripcion):
-        with Spinner(descripcion):
+        ctx = Spinner(descripcion) if ui is None else _nullcontext()
+        if ui is not None:
+            ui.log(descripcion)
+        with ctx:
             r = subprocess.run(
                 [str(pip)] + args,
                 capture_output=True, text=True
             )
         if r.returncode != 0:
-            warn(f"Advertencia en '{descripcion}':")
-            warn(r.stderr[:200])
+            if ui is None:
+                warn(f"Advertencia en '{descripcion}':")
+                warn(r.stderr[:200])
+            else:
+                ui.log(f"Advertencia en '{descripcion}': {r.stderr[:200]}", level="warn")
         else:
-            ok(descripcion)
+            ok(descripcion) if ui is None else ui.log(f"{descripcion} listo.")
 
     # Actualizar pip primero
     pip_install(["install", "--upgrade", "pip"], "Actualizando pip...")
 
+    def _log(msg):
+        info(msg) if ui is None else ui.log(msg)
+
+    def _warn(msg):
+        warn(msg) if ui is None else ui.log(msg, level="warn")
+
     # PyTorch con CUDA o CPU
     if cuda_tag != "cpu":
         torch_url = f"https://download.pytorch.org/whl/{cuda_tag}"
-        info(f"GPU detectada → instalando PyTorch con {cuda_tag}")
+        _log(f"GPU detectada → instalando PyTorch con {cuda_tag}")
         pip_install(
             ["install", "torch", "torchaudio",
              "--index-url", torch_url],
             f"PyTorch + CUDA ({cuda_tag})..."
         )
     else:
-        info("Sin GPU → instalando PyTorch CPU")
+        _log("Sin GPU → instalando PyTorch CPU")
         pip_install(["install", "torch", "torchaudio"], "PyTorch CPU...")
 
     # llama-cpp-python con wheels precompiladas (sin Build Tools)
-    info("Instalando llama-cpp-python (wheel precompilada, sin compilador)...")
+    _log("Instalando llama-cpp-python (wheel precompilada, sin compilador)...")
     if cuda_tag != "cpu":
         llama_url = f"https://abetlen.github.io/llama-cpp-python/whl/{cuda_tag}"
     else:
         llama_url = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
 
-    with Spinner("llama-cpp-python (wheel precompilada)..."):
+    ctx = Spinner("llama-cpp-python (wheel precompilada)...") if ui is None else _nullcontext()
+    with ctx:
         r = subprocess.run(
             [str(pip), "install", "llama-cpp-python",
              "--extra-index-url", llama_url],
             capture_output=True, text=True
         )
     if r.returncode != 0:
-        warn("No se encontró wheel para esta versión de CUDA.")
-        warn("Intentando wheel CPU como alternativa...")
+        _warn("No se encontró wheel para esta versión de CUDA.")
+        _warn("Intentando wheel CPU como alternativa...")
         pip_install(
             ["install", "llama-cpp-python",
              "--extra-index-url",
@@ -417,7 +471,7 @@ def instalar_dependencias(pip: Path, python: Path, cuda_tag: str):
             "llama-cpp-python (CPU fallback)..."
         )
     else:
-        ok("llama-cpp-python instalado.")
+        _log("llama-cpp-python instalado.")
 
     # PyQt6
     pip_install(["install", "PyQt6"], "PyQt6...")
@@ -425,7 +479,7 @@ def instalar_dependencias(pip: Path, python: Path, cuda_tag: str):
     # psutil (para detección de hardware en setup.py)
     pip_install(["install", "psutil"], "psutil...")
 
-    ok("Dependencias base listas.")
+    _log("Dependencias base listas.")
 
 # ─────────────────────────────────────────────
 # PASO 6 — Lanzar setup.py del proyecto

@@ -15,6 +15,8 @@ Requiere: Python 3.10-3.12
 import os, sys, subprocess, platform, shutil, threading, time, json, argparse
 from pathlib import Path
 
+from gui_protocol import GUI_MODE, pedir as input, progreso as _gui_progreso
+
 # ─────────────────────────────────────────────
 # Verificación de versión (solo en fase 1)
 # ─────────────────────────────────────────────
@@ -31,9 +33,13 @@ IS_WIN = platform.system() == "Windows"
 # Colores
 # ─────────────────────────────────────────────
 class C:
-    RESET = "\033[0m"; BOLD = "\033[1m"
-    GREEN = "\033[92m"; YELLOW = "\033[93m"
-    RED = "\033[91m"; CYAN = "\033[96m"; BLUE = "\033[94m"
+    RESET  = ""  if GUI_MODE else "\033[0m"
+    BOLD   = ""  if GUI_MODE else "\033[1m"
+    GREEN  = ""  if GUI_MODE else "\033[92m"
+    YELLOW = ""  if GUI_MODE else "\033[93m"
+    RED    = ""  if GUI_MODE else "\033[91m"
+    CYAN   = ""  if GUI_MODE else "\033[96m"
+    BLUE   = ""  if GUI_MODE else "\033[94m"
 
 def ok(msg):    print(f"{C.GREEN}  ✓ {msg}{C.RESET}")
 def info(msg):  print(f"{C.CYAN}  ℹ {msg}{C.RESET}")
@@ -52,6 +58,11 @@ class Spinner:
     def __init__(self, msg=""):
         self._msg = msg; self._activo = False; self._hilo = None
     def __enter__(self):
+        if GUI_MODE:
+            # Sin animación: una sola línea de log, sin \r (la GUI lee
+            # línea por línea y no necesita verla "moverse").
+            print(f"  {self._msg}", flush=True)
+            return self
         frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
         self._activo = True
         def _loop():
@@ -65,7 +76,8 @@ class Spinner:
     def __exit__(self, *_):
         self._activo = False
         if self._hilo: self._hilo.join(timeout=0.5)
-        print()
+        if not GUI_MODE:
+            print()
 
 # ─────────────────────────────────────────────
 # Barra de progreso para descargas
@@ -76,6 +88,9 @@ class BarraProgreso:
     def actualizar(self, n):
         self.actual = n; self._dibujar()
     def _dibujar(self):
+        if GUI_MODE:
+            _gui_progreso(self.actual, self.total)
+            return
         ancho = 40
         if self.total > 0:
             pct = min(self.actual / self.total, 1.0)

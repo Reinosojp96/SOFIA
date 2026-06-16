@@ -15,11 +15,17 @@ import threading
 import tempfile
 from pathlib import Path
 
+from gui_protocol import GUI_MODE, pedir as input
+
 
 class C:
-    RESET = "\033[0m"; BOLD = "\033[1m"
-    GREEN = "\033[92m"; YELLOW = "\033[93m"
-    RED = "\033[91m"; CYAN = "\033[96m"; BLUE = "\033[94m"
+    RESET  = ""  if GUI_MODE else "\033[0m"
+    BOLD   = ""  if GUI_MODE else "\033[1m"
+    GREEN  = ""  if GUI_MODE else "\033[92m"
+    YELLOW = ""  if GUI_MODE else "\033[93m"
+    RED    = ""  if GUI_MODE else "\033[91m"
+    CYAN   = ""  if GUI_MODE else "\033[96m"
+    BLUE   = ""  if GUI_MODE else "\033[94m"
 
 def ok(msg):   print(f"{C.GREEN}  ✓ {msg}{C.RESET}")
 def info(msg): print(f"{C.CYAN}  ℹ {msg}{C.RESET}")
@@ -54,6 +60,9 @@ class Spinner:
         self._hilo = None
 
     def __enter__(self):
+        if GUI_MODE:
+            print(f"  {self._msg}", flush=True)
+            return self
         frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
         self._activo = True
         def _loop():
@@ -69,7 +78,8 @@ class Spinner:
         self._activo = False
         if self._hilo:
             self._hilo.join(timeout=0.5)
-        print()
+        if not GUI_MODE:
+            print()
 
 
 _modelo_tts = None
@@ -244,7 +254,7 @@ def configurar_voz() -> dict:
         print(f"\n  {C.BOLD}Voces disponibles:{C.RESET}")
         for i, v in enumerate(VOCES, 1):
             nombre_display = v.get("nombre", v["id"])
-        print(f"    {i}. {C.CYAN}{nombre_display}{C.RESET} — {v['descripcion']}")
+            print(f"    {i}. {C.CYAN}{nombre_display}{C.RESET} — {v['descripcion']}")
 
         print(f"\n  {C.BOLD}Comandos:{C.RESET}")
         print("    · Número (ej: 3)      → escuchar muestra de esa voz")

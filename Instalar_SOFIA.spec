@@ -2,11 +2,11 @@
 
 
 a = Analysis(
-    ['instalar_sofia.py'],
+    ['installer_gui.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=['urllib.request', 'zipfile', 'pathlib', 'subprocess', 'threading'],
+    hiddenimports=['urllib.request', 'zipfile', 'pathlib', 'subprocess', 'threading', 'tkinter', 'queue', 'instalar_sofia'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -29,7 +29,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

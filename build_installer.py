@@ -25,14 +25,14 @@ except Exception:
     pass
 
 NOMBRE_EXE = "Instalar_SOFIA"
-SCRIPT     = "instalar_sofia.py"
+SCRIPT     = "installer_gui.py"
 ICONO      = "ui/icon.ico"          # opcional, omitir si no existe
 
 def build():
     args = [
         sys.executable, "-m", "PyInstaller",
         "--onefile",                            # un solo .exe
-        "--console",                            # mostrar consola (es un instalador)
+        "--windowed",                           # sin consola (es una GUI)
         "--clean",
         "--uac-admin",                          # pide elevación UAC al ejecutar
         f"--name={NOMBRE_EXE}",
@@ -41,6 +41,9 @@ def build():
         "--hidden-import=pathlib",
         "--hidden-import=subprocess",
         "--hidden-import=threading",
+        "--hidden-import=tkinter",
+        "--hidden-import=queue",
+        "--hidden-import=instalar_sofia",
     ]
 
     # Agregar icono si existe
