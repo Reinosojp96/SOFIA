@@ -46,6 +46,16 @@ if sys.version_info < (3, 10) or sys.version_info >= (3, 13):
 
 IS_WIN = platform.system() == "Windows"
 
+# Forzar UTF-8 en la consola de Windows (evita UnicodeEncodeError con
+# caracteres del spinner como ⠸ ⠋ etc. en terminales con cp1252)
+if IS_WIN:
+    os.system("chcp 65001 > nul 2>&1")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # ─────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────
@@ -367,10 +377,8 @@ def lanzar_setup(python: Path, directorio: Path):
 # MAIN
 # ─────────────────────────────────────────────
 def main():
-    # Habilitar colores ANSI en Windows
     if IS_WIN:
-        os.system("chcp 65001 > nul 2>&1")
-        os.system("")  # activa modo VT100
+        os.system("")  # activa modo VT100 para colores ANSI
 
     print(f"\n{C.BOLD}{C.BLUE}{'='*55}")
     print("       SOFÍA — Instalador")
