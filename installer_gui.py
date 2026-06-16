@@ -302,6 +302,7 @@ class InstaladorApp(tk.Tk):
                 [str(self.venv_python), str(setup_path), "--desde-bootstrap"],
                 cwd=str(self.directorio),
                 env={**os.environ, "SOFIA_GUI": "1", "PYTHONUNBUFFERED": "1",
+                     "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
                      "PYTHONPATH": str(self.directorio)},
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 stdin=subprocess.PIPE,
