@@ -34,9 +34,10 @@ MODEL_PATH = (
 )
 
 SYSTEM_PROMPT = (
-    "Eres SOFÍA, una asistente de voz en español, concisa y clara. "
-    "Responde en una o dos frases, sin markdown, sin listas. "
-    "Si no sabes algo, dilo brevemente."
+    "Eres SOFÍA, una asistente de voz en español. "
+    "Responde SIEMPRE en UNA sola frase corta, sin markdown, sin listas, "
+    "sin repetir texto, sin traducir al inglés. "
+    "Si no sabes algo, dilo en una frase."
 )
 
 # Ruta del archivo de aprendizaje
@@ -242,19 +243,41 @@ def preguntar(texto: str, contexto_extra: str = "") -> str:
         registrar_frase_fallida(texto, razon="sin_modelo")
         return "No tengo el modelo de IA disponible en este momento."
 
-    prompt = f"{SYSTEM_PROMPT}\n"
+    # Formato de chat Qwen3 (chatml)
+    prompt = (
+        f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n"
+        f"<|im_start|>user\n{texto}<|im_end|>\n"
+        f"<|im_start|>assistant\n"
+    )
     if contexto_extra:
-        prompt += f"Información de contexto: {contexto_extra}\n"
-    prompt += f"Usuario: {texto}\nSOFÍA:"
+        # Inyectar contexto en el turno del sistema
+        prompt = (
+            f"<|im_start|>system\n{SYSTEM_PROMPT} "
+            f"Contexto útil: {contexto_extra}<|im_end|>\n"
+            f"<|im_start|>user\n{texto}<|im_end|>\n"
+            f"<|im_start|>assistant\n"
+        )
 
     try:
         salida = _llm(
             prompt,
-            max_tokens=150,
-            temperature=0.6,
-            stop=["Usuario:", "\n\n"],
+            max_tokens=80,          # corto: una frase
+            temperature=0.5,
+            repeat_penalty=1.3,     # evita repeticiones
+            stop=[
+                "<|im_end|>",       # stop nativo de Qwen3
+                "<|im_start|>",
+                "\n\n",
+                "SOFÍA:",
+                "Usuario:",
+                "Answer:",           # evita que cambie al inglés
+                "user\n",
+            ],
         )
         respuesta = salida["choices"][0]["text"].strip()
+        # Limpiar cualquier artefacto que se cuele igual
+        for tag in ["<|im_end|>", "<|im_start|>", "SOFÍA:", "Answer:"]:
+            respuesta = respuesta.split(tag)[0].strip()
         if not respuesta:
             registrar_frase_fallida(texto, razon="respuesta_vacia")
             return "No tengo una respuesta para eso."

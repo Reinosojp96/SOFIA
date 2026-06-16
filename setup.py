@@ -418,18 +418,35 @@ def paso8_modelos(directorio: Path, hw: dict, prefs: dict):
     if prefs["tts"] == "qwen":
         tts_dir = data_dir / "qwen3_tts"
         if tts_dir.exists() and any(tts_dir.iterdir()):
-            info("Qwen3-TTS ya descargado.")
+            info("Qwen3-TTS CustomVoice ya descargado.")
         elif si_no("¿Descargar Qwen3-TTS 0.6B ahora? (~1.2 GB)", defecto=True):
             try:
                 from huggingface_hub import snapshot_download
-                with Spinner("Descargando Qwen3-TTS 0.6B..."):
+                with Spinner("Descargando Qwen3-TTS 0.6B CustomVoice..."):
                     snapshot_download(
                         repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
                         local_dir=str(tts_dir)
                     )
-                ok("Qwen3-TTS descargado.")
+                ok("Qwen3-TTS CustomVoice descargado.")
             except Exception as e:
                 warn(f"Error: {e}. El modelo se descargará al primer arranque.")
+
+        # Modelo Base — necesario para clonación de voz
+        # Se descarga aquí para que no haya descarga al primer arranque
+        tts_base_dir = data_dir / "qwen3_tts_base"
+        if tts_base_dir.exists() and any(tts_base_dir.iterdir()):
+            info("Qwen3-TTS Base ya descargado.")
+        elif si_no("¿Descargar Qwen3-TTS Base 0.6B? (~1.8 GB, necesario para clonar voz)", defecto=True):
+            try:
+                from huggingface_hub import snapshot_download
+                with Spinner("Descargando Qwen3-TTS 0.6B Base..."):
+                    snapshot_download(
+                        repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+                        local_dir=str(tts_base_dir)
+                    )
+                ok("Qwen3-TTS Base descargado.")
+            except Exception as e:
+                warn(f"Error: {e}. El modelo Base se descargará al primer uso.")
 
     # ── LLM ──
     modelo_llm = data_dir / "modelo.gguf"
@@ -513,7 +530,9 @@ def paso11_acceso_directo(directorio: Path):
         f.write(f'@echo off\n')
         f.write(f'cd /d "{directorio}"\n')
         f.write(f'call venv\\Scripts\\activate\n')
-        f.write(f'pythonw main.py\n')
+        # python.exe (con consola) en lugar de pythonw.exe para que
+        # sounddevice y pyttsx3 funcionen correctamente
+        f.write(f'start /B python main.py\n')
     ok(f"Script de inicio: {bat}")
     info("Haz doble clic en 'iniciar_sofia.bat' para iniciar SOFÍA.")
 

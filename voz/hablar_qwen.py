@@ -62,7 +62,25 @@ if SPEAKER not in VOCES_0_6B:
 # ── Rutas del modelo ──────────────────────────
 _RAIZ = Path(__file__).parent.parent
 _MODELO_LOCAL_CUSTOM = _RAIZ / "data" / "qwen3_tts"
+# El modelo Base puede estar en qwen3_tts_base (si se descargó separado)
+# o en la caché de HuggingFace (ya descargado por el setup en modo clon)
 _MODELO_LOCAL_BASE   = _RAIZ / "data" / "qwen3_tts_base"
+# Si existe la carpeta local del Base, la usamos; si no, buscamos en caché HF
+_HF_CACHE_BASE = None
+try:
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.file_download import hf_hub_download
+    import huggingface_hub as _hf
+    _cache = _hf.constants.HF_HUB_CACHE
+    _candidato = next(
+        (p for p in (__import__("pathlib").Path(_cache)).glob(
+            "models--Qwen--Qwen3-TTS-12Hz-0.6B-Base*") if p.is_dir()), None
+    )
+    if _candidato:
+        _HF_CACHE_BASE = str(_candidato / "snapshots" /
+                             next((_candidato / "snapshots").iterdir()).name)                          if (_candidato / "snapshots").exists() else None
+except Exception:
+    pass
 _VOZ_REF             = Path(os.environ.get("SOFIA_VOZ_REF_PATH", "")) \
                        or _RAIZ / "data" / "voz_referencia.wav"
 
@@ -94,7 +112,13 @@ def _cargar():
         from qwen_tts import Qwen3TTSModel
 
         if MODO == "clon":
-            model_id = _resolver_modelo_id(_MODELO_LOCAL_BASE, _HF_BASE)
+            # Prioridad: carpeta local > caché HF ya descargada > descargar de HF
+            if _MODELO_LOCAL_BASE.exists() and any(_MODELO_LOCAL_BASE.iterdir()):
+                model_id = str(_MODELO_LOCAL_BASE)
+            elif _HF_CACHE_BASE:
+                model_id = _HF_CACHE_BASE
+            else:
+                model_id = _HF_BASE
         else:
             model_id = _resolver_modelo_id(_MODELO_LOCAL_CUSTOM, _HF_CUSTOM)
 
@@ -132,6 +156,7 @@ class HabladorQwen:
         with _lock:
             try:
                 import sounddevice as sd
+                import traceback
 
                 if MODO == "clon" and _VOZ_REF.exists():
                     import soundfile as sf
@@ -164,4 +189,6 @@ class HabladorQwen:
                 sd.wait()
 
             except Exception as e:
+                import traceback
                 print(f"[tts] Error al generar voz: {e}")
+                traceback.print_exc()

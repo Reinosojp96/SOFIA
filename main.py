@@ -1,46 +1,28 @@
 """
-SOFÍA - Punto de entrada principal.
-Solo arranca la aplicación. La instalación y configuración
-se hace con setup.py (una sola vez).
+Punto de entrada de SOFIA.
+
+Registra las skills en el router, arranca la interfaz gráfica y conecta
+la entrada de voz (botón + activación continua) y texto al mismo flujo
+de procesamiento.
+
+MEJORAS v2:
+  - Registra la skill de aprendizaje (skills/aprendizaje.py)
+  - origen en _procesar_y_responder usa PALABRA_ACTIVACION real siempre
+  - on_closing no puede lanzar excepción si escuchador es None
+  - mensaje de bienvenida más informativo
 """
 
 import sys
 import os
+import threading
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-# ── Cargar .env ──────────────────────────────
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv()  # busca .env en el directorio actual / raíz del proyecto
 except ImportError:
-    pass  # si no hay dotenv, usa variables del sistema
-
-# ── Verificar instalación ────────────────────
-from pathlib import Path
-
-def _verificar_instalacion():
-    """Comprueba que setup.py ya fue ejecutado."""
-    problemas = []
-    raiz = Path(__file__).parent
-
-    if not (raiz / ".env").exists():
-        problemas.append(".env no encontrado")
-
-    if not (raiz / "voz" / "escuchar.py").exists():
-        problemas.append("Módulos de voz no encontrados")
-
-    if problemas:
-        print("[SOFÍA] Parece que la instalación no está completa:")
-        for p in problemas:
-            print(f"  · {p}")
-        print("\nEjecuta primero: python setup.py")
-        sys.exit(1)
-
-_verificar_instalacion()
-
-# ── Imports del proyecto ─────────────────────
-import threading
+    print("[main] python-dotenv no instalado; usando solo variables de entorno del sistema.")
 
 from core.router import router
 from core import ia, memoria
@@ -49,17 +31,21 @@ from ui.widget import ejecutar_app
 
 
 def registrar_skills():
+    # rutina primero: "buenos días" debe ganar sobre cualquier otro match
     router.registrar("rutina",      rutina.KEYWORDS,       rutina.manejar)
-    router.registrar("clima",       clima.KEYWORDS,        clima.consultar_clima)
+    router.registrar("clima",       clima.KEYWORDS,       clima.consultar_clima)
     router.registrar("tiempo",      tiempo.KEYWORDS,       tiempo.manejar)
     router.registrar("sistema",     sistema.KEYWORDS,      sistema.manejar)
     router.registrar("web",         web.KEYWORDS,          web.manejar)
     router.registrar("notas",       notas.KEYWORDS,        notas.manejar)
     router.registrar("aprendizaje", aprendizaje.KEYWORDS,  aprendizaje.manejar)
+
+    # Fallback: conversación libre con la IA local (llama.cpp)
     router.registrar_fallback(lambda texto: ia.preguntar(texto))
 
 
 def procesar_comando(texto: str) -> str:
+    """Punto único de entrada para texto o voz."""
     if not texto or not texto.strip():
         return "No escuché nada."
     return router.procesar(texto)
@@ -69,26 +55,23 @@ def main():
     registrar_skills()
 
     escuchador = None
-    hablador   = None
-    PALABRA_ACTIVACION = os.environ.get("SOFIA_WAKE_WORD", "sofia")
+    hablador = None
+    PALABRA_ACTIVACION = "sofia"
 
-    # ── Cargar voz ───────────────────────────
     try:
         from voz.escuchar import Escuchador, PALABRA_ACTIVACION as _PA
-        from voz.hablar import hablar as _hablar_fn
+        from voz import hablar as hablador_modulo
         PALABRA_ACTIVACION = _PA
         escuchador = Escuchador()
-
-        class _Hablador:
-            def hablar(self, texto):
-                _hablar_fn(texto)
-
-        hablador = _Hablador()
+        hablador = hablador_modulo
     except Exception as e:
-        print(f"[main] Voz no disponible: {e}")
+        print(f"[main] Voz no disponible, solo modo texto: {e}")
 
-    # ── Helpers ──────────────────────────────
     def _hablar(texto: str):
+        """
+        Habla por TTS, pausando la captura de audio mientras tanto para
+        que el micrófono no se escuche a sí mismo (bucle de feedback).
+        """
         if not hablador:
             return
         if escuchador:
@@ -100,6 +83,7 @@ def main():
                 escuchador.reanudar(retardo=0.35)
 
     def _procesar_y_responder(texto: str, origen: str = "Tú (voz)"):
+        """Común para botón y activación continua: muestra, procesa, habla."""
         widget.agregar_mensaje(origen, texto)
         respuesta = procesar_comando(texto)
         widget.agregar_mensaje("SOFÍA", respuesta)
@@ -109,23 +93,31 @@ def main():
         return procesar_comando(texto)
 
     def on_hablar_voz():
+        """Botón 'Hablar': una escucha manual, sin necesidad de decir el nombre."""
         if not escuchador:
-            widget.agregar_mensaje("SOFÍA", "El micrófono no está disponible.")
+            widget.agregar_mensaje("SOFÍA", "El micrófono no está disponible en este equipo.")
             return
+
         texto = escuchador.escuchar_frase(tiempo_espera=6, limite_frase=10)
         if not texto:
             widget.agregar_mensaje("SOFÍA", "No escuché nada, intenta de nuevo.")
             return
+
         _procesar_y_responder(texto, origen="Tú")
 
     def hilo_activacion_continua():
+        """
+        Corre en segundo plano: espera la palabra de activación,
+        responde como Alexa y luego escucha el comando.
+        """
         if not escuchador:
             return
+
         while True:
             try:
                 resto = escuchador.esperar_activacion()
             except Exception as e:
-                print(f"[voz] Error en activación: {e}")
+                print(f"[voz] Error en activación continua: {e}")
                 continue
 
             origen = f"Tú ({PALABRA_ACTIVACION.capitalize()})"
@@ -134,45 +126,75 @@ def main():
             if resto:
                 _procesar_y_responder(resto, origen=origen)
             else:
-                _hablar("Dime")
+                if hablador:
+                    _hablar("Dime")
                 comando = escuchador.escuchar_frase(tiempo_espera=6, limite_frase=10)
                 if comando:
                     _procesar_y_responder(comando, origen=origen)
                 else:
-                    widget.agregar_mensaje("SOFÍA", "No escuché ningún comando.")
+                    widget.agregar_mensaje("SOFÍA", "No escuché ningún comando, te sigo escuchando.")
 
             widget.set_estado("Lista", "#3fb950")
 
     def hilo_alarmas():
+        """
+        Revisa cada 20s si alguna alarma activa coincide con la hora
+        actual (HH:MM). Si es así, la anuncia (voz + chat) y la
+        desactiva (alarma de un solo uso).
+        """
         import time
         from datetime import datetime as _dt
+
         while True:
             try:
                 ahora = _dt.now().strftime("%H:%M")
                 for alarma in memoria.alarmas_para_disparar(ahora):
                     etiqueta = alarma.get("etiqueta") or "Es la hora que pediste."
-                    widget.agregar_mensaje("SOFÍA", f"⏰ Alarma de las {alarma['hora']}: {etiqueta}")
+                    mensaje = f"⏰ Alarma de las {alarma['hora']}: {etiqueta}"
+                    widget.agregar_mensaje("SOFÍA", mensaje)
                     widget.set_estado("¡Alarma!", "#d29922")
-                    _hablar(f"Alarma. {etiqueta}")
+                    if hablador:
+                        _hablar(f"Alarma. {etiqueta}")
                     widget.set_estado("Lista", "#3fb950")
             except Exception as e:
                 print(f"[alarmas] error: {e}")
+
             time.sleep(20)
 
     def post_init(widget_creado):
         nonlocal widget
         widget = widget_creado
 
+        from datetime import datetime as _dt
+        hora = _dt.now().hour
+        if hora < 12:
+            saludo = "Buenos días"
+        elif hora < 19:
+            saludo = "Buenas tardes"
+        else:
+            saludo = "Buenas noches"
+
         nombre = os.environ.get("SOFIA_USER_NAME", "")
-        saludo = f"Hola{', ' + nombre if nombre else ''}. Soy SOFÍA."
-        widget.agregar_mensaje("SOFÍA", saludo)
+        if nombre:
+            bienvenida = f"{saludo}, {nombre}. Bienvenido, estoy lista para ayudarte."
+        else:
+            bienvenida = f"{saludo}. Bienvenido, soy SOFÍA y estoy lista para ayudarte."
+
+        widget.agregar_mensaje("SOFÍA", bienvenida)
+
+        # Hablar el mensaje de bienvenida en un hilo para no bloquear
+        # la GUI mientras carga el modelo TTS
+        def _hablar_bienvenida():
+            _hablar(bienvenida)
+        threading.Thread(target=_hablar_bienvenida, daemon=True).start()
 
         if escuchador:
             widget.agregar_mensaje(
                 "SOFÍA",
                 f"Di '{PALABRA_ACTIVACION.capitalize()}' para activarme por voz."
             )
-            threading.Thread(target=hilo_activacion_continua, daemon=True).start()
+            hilo = threading.Thread(target=hilo_activacion_continua, daemon=True)
+            hilo.start()
         else:
             widget.agregar_mensaje("SOFÍA", "Micrófono no disponible. Usa el modo texto.")
 
