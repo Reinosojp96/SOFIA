@@ -78,6 +78,8 @@ class InstaladorApp(tk.Tk):
         self.venv_pip: Path | None = None
         self.proc_setup: subprocess.Popen | None = None
         self._respuesta_pendiente: "queue.Queue[str]" = queue.Queue()
+        self._ultimas_lineas: list[str] = []
+        self._buffer_contexto: list[str] = []
 
         self._contenedor = ttk.Frame(self, padding=16)
         self._contenedor.pack(fill="both", expand=True)
@@ -350,6 +352,21 @@ class InstaladorApp(tk.Tk):
         p = self._limpiar()
         ttk.Label(p, text="SOFÍA necesita una respuesta", style="Titulo.TLabel").pack(
             anchor="w", pady=(0, 12))
+
+        # Contexto: las líneas que setup.py/paso_voz.py imprimieron justo
+        # antes de pedir la respuesta (p. ej. el menú con las opciones
+        # 1/2/3) — sin esto, preguntas como "Elige [1/2/3]" no dicen nada.
+        contexto = self._buffer_contexto
+        if contexto:
+            cont_frame = ttk.Frame(p)
+            cont_frame.pack(fill="both", expand=True, pady=(0, 12))
+            texto_ctx = tk.Text(cont_frame, height=10, wrap="word", state="normal",
+                                 bg="#1e1e1e", fg="#dddddd")
+            texto_ctx.insert("end", "\n".join(contexto))
+            texto_ctx.configure(state="disabled")
+            texto_ctx.pack(fill="both", expand=True)
+        self._buffer_contexto = []
+
         ttk.Label(p, style="Sub.TLabel", wraplength=560, justify="left", text=prompt).pack(
             anchor="w", pady=(0, 12))
 
@@ -418,7 +435,6 @@ class InstaladorApp(tk.Tk):
     # Bucle de drenado de eventos (hilo principal de Tk)
     # ─────────────────────────────────────────────
     def _drenar_eventos(self):
-        self._ultimas_lineas = getattr(self, "_ultimas_lineas", [])
         try:
             while True:
                 evento = self._eventos.get_nowait()
@@ -426,10 +442,13 @@ class InstaladorApp(tk.Tk):
 
                 if tipo == "status" and hasattr(self, "_lbl_status"):
                     self._set_status(evento[1])
-                elif tipo == "log" and hasattr(self, "_log_text"):
-                    self._agregar_log(evento[1], evento[2])
+                elif tipo == "log":
+                    if hasattr(self, "_log_text"):
+                        self._agregar_log(evento[1], evento[2])
                     self._ultimas_lineas.append(evento[1])
                     self._ultimas_lineas = self._ultimas_lineas[-200:]
+                    self._buffer_contexto.append(evento[1])
+                    self._buffer_contexto = self._buffer_contexto[-20:]
                 elif tipo == "progress" and hasattr(self, "_barra"):
                     self._set_progress(evento[1], evento[2])
                 elif tipo == "fase_a_ok":
