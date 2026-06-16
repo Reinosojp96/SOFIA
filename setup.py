@@ -328,7 +328,28 @@ def _guardar_estado(directorio: Path, hw: dict, prefs: dict):
     return ruta
 
 
+def _guardar_diagnostico_instalacion(directorio: Path, datos: dict):
+    """Acumula tiempos de instalación en data/logs/diagnostico_instalacion.json
+    (fase1 y fase2 son procesos separados, así que se fusiona en vez de
+    sobreescribir)."""
+    try:
+        log_dir = directorio / "data" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ruta = log_dir / "diagnostico_instalacion.json"
+        actual = {}
+        if ruta.exists():
+            try:
+                actual = json.loads(ruta.read_text(encoding="utf-8"))
+            except Exception:
+                actual = {}
+        actual.update(datos)
+        ruta.write_text(json.dumps(actual, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def fase1():
+    _t0 = time.perf_counter()
     print(f"\n{C.BOLD}{C.BLUE}{'='*55}")
     print("       SOFÍA — Instalador v2.0")
     print(f"{'='*55}{C.RESET}")
@@ -342,6 +363,10 @@ def fase1():
     paso6_dependencias(pip, hw, prefs)
 
     estado_path = _guardar_estado(directorio, hw, prefs)
+
+    _guardar_diagnostico_instalacion(directorio, {
+        "instalacion_fase1_min": round((time.perf_counter() - _t0) / 60, 2),
+    })
 
     print(f"\n{C.BOLD}{C.BLUE}{'─'*55}")
     print("  Dependencias listas. Continuando con el venv...")
@@ -393,13 +418,22 @@ def paso8_modelos(directorio: Path, hw: dict, prefs: dict):
     ram     = hw.get("ram_gb", 8)
     espacio = hw.get("espacio_gb", 20)
 
+    # Todos los modelos descargados aquí deben terminar dentro de data/,
+    # en las mismas rutas que usará voz/escuchar.py en tiempo de ejecución
+    # (evita descargar dos veces y deja todo contenido en una sola carpeta).
+    dir_whisper   = data_dir / "modelos" / "whisper"
+    dir_torch_hub = data_dir / "modelos" / "torch_hub"
+    dir_whisper.mkdir(parents=True, exist_ok=True)
+    dir_torch_hub.mkdir(parents=True, exist_ok=True)
+
     # ── Whisper ──
     modelo_whisper = "base" if vram >= 4 else "tiny"
     info(f"Descargando Whisper '{modelo_whisper}'...")
     try:
         from faster_whisper import WhisperModel
         with Spinner(f"Whisper '{modelo_whisper}'..."):
-            WhisperModel(modelo_whisper, device="cpu", compute_type="int8")
+            WhisperModel(modelo_whisper, device="cpu", compute_type="int8",
+                         download_root=str(dir_whisper))
         ok(f"Whisper '{modelo_whisper}' listo.")
     except Exception as e:
         warn(f"No se pudo predescargar Whisper: {e}")
@@ -407,6 +441,7 @@ def paso8_modelos(directorio: Path, hw: dict, prefs: dict):
     # ── Silero-VAD ──
     try:
         import torch
+        torch.hub.set_dir(str(dir_torch_hub))
         with Spinner("Silero-VAD..."):
             torch.hub.load("snakers4/silero-vad","silero_vad",
                            force_reload=False, onnx=False)
@@ -585,12 +620,20 @@ def fase2(directorio: Path, estado_path: Path):
     try: estado_path.unlink()
     except Exception: pass
 
-    hw         = paso7_re_detectar_hw(hw)
+    hw = paso7_re_detectar_hw(hw)
+
+    _t_modelos = time.perf_counter()
     paso8_modelos(directorio, hw, prefs)
+    descarga_modelos_min = round((time.perf_counter() - _t_modelos) / 60, 2)
+
     config_voz = paso9_configurar_voz(directorio, prefs)
     paso10_env(directorio, prefs, config_voz)
     paso11_acceso_directo(directorio)
     paso12_test(directorio, prefs)
+
+    _guardar_diagnostico_instalacion(directorio, {
+        "descarga_modelos_min": descarga_modelos_min,
+    })
 
 
 # ─────────────────────────────────────────────

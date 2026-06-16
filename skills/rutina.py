@@ -56,43 +56,49 @@ def _resumen_clima() -> str:
 
 def _abrir_whatsapp() -> str:
     """
-    Intenta abrir WhatsApp de escritorio. Si no está instalado,
-    abre WhatsApp Web en el navegador. Devuelve un mensaje para el usuario.
+    Abre WhatsApp e intenta leer el contenido via accesibilidad UIA.
+    Si puede leer conversaciones, las menciona. Si no, solo dice que lo abrió.
     """
-    # Rutas comunes de WhatsApp en Windows
+    import time
+
     rutas_windows = [
         os.path.join(os.environ.get("LOCALAPPDATA", ""), "WhatsApp", "WhatsApp.exe"),
         os.path.join(os.environ.get("APPDATA", ""), "WhatsApp", "WhatsApp.exe"),
     ]
 
+    abierto = False
+
     if sys.platform == "win32":
-        # Intentar por ruta directa
         for ruta in rutas_windows:
             if os.path.exists(ruta):
                 try:
                     subprocess.Popen([ruta])
-                    return (
-                        "Abrí WhatsApp. No puedo leer tus mensajes directamente, "
-                        "pero puedes revisarlos ahí."
-                    )
+                    abierto = True
+                    break
                 except Exception:
                     pass
-        # Intentar por startfile (funciona si WhatsApp está en el Menú Inicio)
-        try:
-            os.startfile("whatsapp:")
-            return (
-                "Abrí WhatsApp. Revisa tus mensajes nuevos ahí, "
-                "no tengo acceso directo a ellos."
-            )
-        except Exception:
-            pass
+        if not abierto:
+            try:
+                os.startfile("whatsapp:")
+                abierto = True
+            except Exception:
+                pass
 
-    # Fallback: WhatsApp Web
-    webbrowser.open("https://web.whatsapp.com")
-    return (
-        "No encontré WhatsApp instalado, abrí WhatsApp Web en tu navegador. "
-        "Revisa tus mensajes ahí."
-    )
+    if not abierto:
+        webbrowser.open("https://web.whatsapp.com")
+        return "Abrí WhatsApp Web en el navegador."
+
+    # Esperar un momento a que WhatsApp cargue y leer contenido
+    time.sleep(2)
+    try:
+        from skills.control_escritorio import desktop
+        resumen = desktop.leer_contenido_ventana()
+        if resumen:
+            return f"Abrí WhatsApp. {resumen}."
+    except Exception:
+        pass
+
+    return "Abrí WhatsApp."
 
 
 def _resumen_agenda() -> str:

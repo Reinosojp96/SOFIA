@@ -1,0 +1,76 @@
+@startuml deployment
+title SOFÍA — Diagrama de Despliegue
+
+skinparam nodeStyle rectangle
+
+node "Equipo del usuario (Windows 10/11)" as PC {
+
+  node "Proceso Python (venv)" as Proceso {
+    component "main.py\n(orquestador)" as Main
+    component "PyQt6\n(ui.widget)" as Qt
+    component "core.router /\ncore.memoria /\ncore.context_manager" as Core
+    component "skills.*" as Skills
+  }
+
+  node "CPU" as CPU {
+    component "Silero-VAD" as VAD
+    component "Faster-Whisper \"tiny\"\n(wake-word, siempre activo)" as WhisperTiny
+    component "pyttsx3\n(TTS offline por defecto)" as Pyttsx3
+  }
+
+  node "GPU NVIDIA (CUDA, opcional)" as GPU {
+    component "Faster-Whisper \"base\"\n(comandos, lazy load)" as WhisperBase
+    component "Qwen3-TTS\n(voz natural/clonada, lazy load)" as QwenTTS
+    component "llama.cpp\n(Qwen3-8B-Q4_K_M.gguf)" as LlamaCpp
+  }
+
+  database "data/\n(JSON + audio + modelo)" as DataDir {
+    artifact "memoria.json"
+    artifact "aprendizaje.json"
+    artifact "modelo.gguf (~4.5 GB)"
+    artifact "audio_estatico/*.wav"
+    artifact ".env"
+  }
+
+  database "Documentos/\nnebula_notes.json" as Notas
+
+  component "Micrófono\n(sounddevice / SOFIA_MIC_NAME)" as Mic
+  component "Altavoces" as Speakers
+  component "Windows API\n(pywinauto / psutil)" as WinAPI
+}
+
+cloud "Internet" as Internet {
+  node "Open-Meteo API" as OpenMeteo
+  node "Hugging Face Hub" as HF
+}
+
+Mic --> VAD
+VAD --> WhisperTiny
+WhisperTiny --> Main : wake-word detectada
+Main --> WhisperBase : carga perezosa (hilo de fondo)
+WhisperBase --> Main : texto del comando
+
+Main --> Core
+Core --> Skills
+Skills --> WinAPI : control de apps/ventanas
+Skills --> OpenMeteo : consulta clima (HTTP)
+Core --> LlamaCpp : fallback conversacional
+LlamaCpp --> HF : descarga modelo .gguf\n(primer uso)
+
+Main --> Pyttsx3 : TTS por defecto
+Main --> QwenTTS : TTS alterno (SOFIA_TTS_MOTOR=qwen)
+Pyttsx3 --> Speakers
+QwenTTS --> Speakers
+
+Core --> DataDir : lectura/escritura JSON
+Skills --> Notas : notas (compatibles con NebulaNotes)
+
+Main --> Qt : actualiza interfaz (señales Qt)
+
+note bottom of GPU
+  GPU es opcional. Sin CUDA disponible,
+  SOFÍA degrada automáticamente a CPU:
+  Whisper "base" en int8 y TTS pyttsx3.
+end note
+
+@enduml

@@ -27,7 +27,16 @@ from __future__ import annotations
 import os
 import queue
 import threading
+from pathlib import Path
 import numpy as np
+
+# Raíz del proyecto: todos los modelos descargados (Silero-VAD, Whisper)
+# se contienen dentro de data/modelos/ en vez de la caché global del
+# usuario (~/.cache/torch, ~/.cache/huggingface), para que el peso real
+# del programa sea medible y no deje residuos al desinstalar.
+_RAIZ = Path(__file__).parent.parent
+_DIR_TORCH_HUB = _RAIZ / "data" / "modelos" / "torch_hub"
+_DIR_WHISPER   = _RAIZ / "data" / "modelos" / "whisper"
 
 # ---------------------------------------------------------------------------
 # Configuración global (se puede sobreescribir con variables de entorno)
@@ -43,6 +52,10 @@ MIC_NAME: str = os.environ.get("SOFIA_MIC_NAME", "").strip().lower()
 # como "sofia" muy fácilmente. "base" es notablemente más preciso y sigue
 # siendo viable en CPU para uso en tiempo real.
 WHISPER_MODEL_SIZE: str = os.environ.get("SOFIA_WHISPER_MODEL", "base")
+
+# Modelo ligero SOLO para detección de la wake-word (siempre cargado).
+# "tiny" ocupa ~0.2 GB y es suficiente para distinguir "sofia" en 2.5 s.
+WHISPER_WW_SIZE: str = os.environ.get("SOFIA_WHISPER_WW_MODEL", "tiny")
 
 # Variantes fonéticas que el STT puede devolver al oír "sofia".
 # Incluye los errores REALES observados en los logs v2 (con modelo tiny):
@@ -141,24 +154,30 @@ if _vocab_extra:
 # Carga perezosa de modelos
 # ---------------------------------------------------------------------------
 
-def _cargar_modelos():
-    """Carga Silero-VAD y Faster-Whisper. Puede tardar unos segundos la primera vez."""
+def _cargar_vad():
+    """Carga solo Silero-VAD. CPU, sin VRAM."""
     import torch
-    from faster_whisper import WhisperModel
-
+    _DIR_TORCH_HUB.mkdir(parents=True, exist_ok=True)
+    torch.hub.set_dir(str(_DIR_TORCH_HUB))
     vad_model, utils = torch.hub.load(
         repo_or_dir="snakers4/silero-vad",
         model="silero_vad",
         force_reload=False,
         onnx=False,
     )
-    get_speech_prob = utils[0]
+    return vad_model, utils[0]
 
+
+def _cargar_whisper_model(size: str):
+    """Carga Faster-Whisper del tamaño indicado. Puede usar GPU."""
+    from faster_whisper import WhisperModel
+    _DIR_WHISPER.mkdir(parents=True, exist_ok=True)
     device  = "cuda" if _gpu_disponible() else "cpu"
     compute = "float16" if device == "cuda" else "int8"
-    whisper = WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute)
-
-    return vad_model, get_speech_prob, whisper, device
+    return WhisperModel(
+        size, device=device, compute_type=compute,
+        download_root=str(_DIR_WHISPER),
+    ), device
 
 
 def _gpu_disponible() -> bool:
@@ -237,7 +256,11 @@ class Escuchador:
 
     def __init__(self):
         print("[voz] Cargando modelos (primera vez puede tardar unos segundos)...")
-        self._vad, self._get_prob, self._whisper, self._device = _cargar_modelos()
+        self._vad, self._get_prob = _cargar_vad()
+        # Whisper tiny: siempre cargado, solo para detectar la wake-word
+        self._whisper_ww, self._device = _cargar_whisper_model(WHISPER_WW_SIZE)
+        # Whisper base: se carga bajo demanda para transcribir comandos reales
+        self._whisper_cmd = None
         print(f"[voz] Modelos listos — dispositivo: {self._device} — whisper: {WHISPER_MODEL_SIZE}")
 
         self._device_idx = _seleccionar_dispositivo()
@@ -253,6 +276,30 @@ class Escuchador:
         self._pausado = threading.Event()
         self._hilo    = threading.Thread(target=self._capturar_audio, daemon=True)
         self._hilo.start()
+
+    # ------------------------------------------------------------------
+    # Carga / descarga de Whisper para comandos (bajo demanda)
+    # ------------------------------------------------------------------
+
+    def cargar_whisper_cmd(self):
+        """Carga Whisper base para transcribir comandos. Idempotente."""
+        if self._whisper_cmd is not None:
+            return
+        print(f"[voz] Cargando Whisper {WHISPER_MODEL_SIZE} (comandos)...")
+        self._whisper_cmd, _ = _cargar_whisper_model(WHISPER_MODEL_SIZE)
+        print(f"[voz] Whisper {WHISPER_MODEL_SIZE} listo")
+
+    def descargar_whisper_cmd(self):
+        """Libera Whisper base de la VRAM."""
+        if self._whisper_cmd is None:
+            return
+        self._whisper_cmd = None
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        print("[voz] Whisper cmd descargado")
 
     # ------------------------------------------------------------------
     # Pausa de captura (usar mientras SOFIA habla)
@@ -329,8 +376,10 @@ class Escuchador:
     # Transcripción
     # ------------------------------------------------------------------
 
-    def _transcribir(self, audio: np.ndarray) -> str:
-        segments, _ = self._whisper.transcribe(
+    def _transcribir(self, audio: np.ndarray, modelo=None) -> str:
+        # Si no se pasa modelo, usa whisper_cmd si está cargado, si no el ww
+        m = modelo or self._whisper_cmd or self._whisper_ww
+        segments, _ = m.transcribe(
             audio,
             language="es",
             beam_size=1,
@@ -350,7 +399,9 @@ class Escuchador:
         """
         Espera hasta 'tiempo_espera' segundos a que empiece la voz,
         luego acumula hasta 'limite_frase' segundos y transcribe.
+        Carga Whisper base si aún no está disponible.
         """
+        self.cargar_whisper_cmd()
         max_espera_chunks  = int(tiempo_espera * SAMPLE_RATE / CHUNK_SAMPLES) if tiempo_espera else 99_999
         max_comando_chunks = int(limite_frase  * SAMPLE_RATE / CHUNK_SAMPLES)
 
@@ -436,7 +487,8 @@ class Escuchador:
                     break
 
         audio = np.concatenate(voz_buf)
-        return self._transcribir(audio) or None
+        # Wake-word usa siempre el modelo tiny (rápido, ya cargado)
+        return self._transcribir(audio, modelo=self._whisper_ww) or None
 
     def cerrar(self):
         """Detiene el hilo de captura de forma segura."""

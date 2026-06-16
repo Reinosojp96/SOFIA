@@ -1,0 +1,138 @@
+@startuml class_diagram_core
+title SOFÍA — Diagrama de Clases: Núcleo (core)
+
+skinparam classAttributeIconSize 0
+
+class Router {
+  - _skills: list[tuple[str, list[str], callable]]
+  - _fallback: callable | None
+  - _contadores: dict[str, int]
+  + registrar(nombre, keywords, funcion)
+  + registrar_fallback(funcion)
+  + procesar(texto): str
+  + stats(): str
+  - _normalizar(texto): str
+}
+
+class ContextManager {
+  - _ctx: dict
+  + actualizar(app, titulo, accion, contenido)
+  + app_activa(): str | None
+  + titulo_activo(): str | None
+  + ultima_accion(): str | None
+  + snapshot(): dict
+  + contenido_resumen(): str
+  + tiene_contexto(): bool
+}
+
+class DesktopController {
+  - _pywinauto_ok: bool
+  + leer_contenido_ventana(): str
+  + obtener_ventana_activa(): dict
+  - _extractor_para(proceso): callable | None
+  - _leer_whatsapp(pid): str
+  - _leer_telegram(pid): str
+  - _leer_navegador(pid): str
+  - _leer_notepad(pid): str
+  - _leer_explorer(pid): str
+  - _leer_titulo_ventana(pid): str
+  - _leer_uia_generico(pid): str
+  - _app_por_pid(pid): Application | None
+}
+
+package "core.ia (módulo funcional)" {
+  class "ia (funciones)" as IAModule {
+    + MODEL_PATH: str
+    + SYSTEM_PROMPT: str
+    + esta_disponible(): bool
+    + preguntar(texto, contexto_extra): str
+    + registrar_frase_fallida(texto, razon)
+    + registrar_consulta(texto, respuesta)
+    + agregar_correccion(frase, respuesta, skill)
+    + obtener_estadisticas(): str
+    - _cargar()
+    - _descargar_modelo(): bool
+    - _es_incoherente(respuesta): bool
+    - _llm: Llama
+  }
+}
+
+package "core.memoria (módulo funcional)" {
+  class "memoria (funciones)" as MemoriaModule {
+    + agregar_evento(titulo, fecha, hora): dict
+    + listar_eventos(): list
+    + eliminar_evento(evento_id)
+    + agregar_alarma(hora, etiqueta): dict
+    + listar_alarmas(solo_activas): list
+    + desactivar_alarma(alarma_id)
+    + alarmas_para_disparar(hora_actual): list
+    + agregar_tarea(texto): dict
+    + listar_tareas(solo_pendientes): list
+    + completar_tarea(tarea_id)
+    + agregar_nota(contenido, titulo): dict
+    + listar_notas(): list
+    + ultima_nota(): dict | None
+    + contar_tareas_pendientes(): int
+    + contar_eventos_hoy(): int
+    - _leer(): dict
+    - _guardar(data)
+  }
+}
+
+class Escuchador {
+  - _vad: SileroVAD
+  - _whisper_ww: WhisperModel
+  - _whisper_cmd: WhisperModel | None
+  - _audio_q: Queue
+  - _pausado: threading.Event
+  - _parar: threading.Event
+  + cargar_whisper_cmd()
+  + descargar_whisper_cmd()
+  + pausar()
+  + reanudar(retardo)
+  + escuchar_frase(tiempo_espera, limite_frase): str | None
+  + esperar_activacion(): str
+  + cerrar()
+  - _capturar_audio()
+  - _es_voz(chunk): bool
+  - _transcribir(audio, modelo): str
+}
+
+class HabladorQwen {
+  + hablar(texto)
+  + generar_array(texto): tuple
+  + cargar()
+}
+
+class AleWidget {
+  - on_comando: callable
+  - on_hablar_voz: callable
+  - senales: _Senales
+  + agregar_mensaje(autor, texto)
+  + set_estado(texto, color)
+  + refrescar_tarjetas()
+}
+
+Router "1" o-- "many" SkillFuncion : registra (nombre,\nkeywords, funcion)
+Router ..> "ia.preguntar()" : fallback
+
+note right of SkillFuncion
+  Una skill no es una clase: es un
+  módulo con KEYWORDS: list[str] y
+  una función manejar(texto)->str
+  (ej. skills.clima, skills.notas).
+end note
+
+class SkillFuncion <<module function>> {
+  + KEYWORDS: list[str]
+  + manejar(texto): str
+}
+
+DesktopController --> ContextManager : actualiza/lee\nestado de escritorio
+AleWidget --> DesktopController : polling cada 3s\n(ventana activa)
+AleWidget --> ContextManager : actualiza snapshot
+Escuchador ..> Router : entrega texto transcrito
+IAModule ..> MemoriaModule : (independiente, JSON propio\naprendizaje.json)
+HabladorQwen <.. "voz.hablar (módulo)" : lazy load (_ensure_qwen)
+
+@enduml

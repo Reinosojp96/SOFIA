@@ -19,7 +19,7 @@ import os
 import threading
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QObject, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QFrame, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QHBoxLayout, QTextEdit, QGraphicsDropShadowEffect,
@@ -53,6 +53,7 @@ class _Senales(QObject):
     mensaje = pyqtSignal(str, str)
     estado = pyqtSignal(str, str)
     tarjetas = pyqtSignal(object, object, object)
+    ventana_activa = pyqtSignal(str, str, str, object)  # app, titulo, resumen, sugerencias
 
 
 class AleWidget(QWidget):
@@ -65,15 +66,18 @@ class AleWidget(QWidget):
         self.senales.mensaje.connect(self._agregar_mensaje_ui)
         self.senales.estado.connect(self._set_estado_ui)
         self.senales.tarjetas.connect(self._aplicar_tarjetas)
+        self.senales.ventana_activa.connect(self._aplicar_ventana_activa)
+        self._polling_escritorio = False
 
         self._drag_pos = None
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(420, 600)
+        self.resize(420, 760)
 
         self._construir_ui()
         self._actualizar_tarjetas_async()
+        self._iniciar_timer_escritorio()
 
     # ------------------------------------------------------------
     # Construccion de la interfaz
@@ -107,6 +111,8 @@ class AleWidget(QWidget):
         self._construir_header(layout)
         self._construir_saludo(layout)
         self._construir_tarjetas(layout)
+        self._construir_panel_ventana_activa(layout)
+        self._construir_panel_sugerencias(layout)
         self._construir_chat(layout)
         self._construir_barra_inferior(layout)
 
@@ -187,6 +193,61 @@ class AleWidget(QWidget):
         v.addWidget(sub)
 
         return {"frame": frame, "valor": valor, "sub": sub}
+
+    def _construir_panel_ventana_activa(self, layout):
+        frame = QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {BG_CARD};
+                border-radius: 12px;
+            }}
+        """)
+        v = QVBoxLayout(frame)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(3)
+
+        cabecera = QLabel("🖥  Ventana Activa")
+        cabecera.setStyleSheet(f"color: {FG_MUTED}; font-size: 9px; background: transparent;")
+        v.addWidget(cabecera)
+
+        self._lbl_ventana_app = QLabel("—")
+        self._lbl_ventana_app.setStyleSheet(
+            f"color: {ACCENT_2}; font-size: 12px; font-weight: 700; background: transparent;"
+        )
+        v.addWidget(self._lbl_ventana_app)
+
+        self._lbl_ventana_resumen = QLabel("Sin información disponible")
+        self._lbl_ventana_resumen.setStyleSheet(
+            f"color: {FG_MUTED}; font-size: 10px; background: transparent;"
+        )
+        self._lbl_ventana_resumen.setWordWrap(True)
+        v.addWidget(self._lbl_ventana_resumen)
+
+        layout.addWidget(frame)
+
+    def _construir_panel_sugerencias(self, layout):
+        self._frame_sugerencias = QFrame()
+        self._frame_sugerencias.setStyleSheet(f"""
+            QFrame {{
+                background-color: {BG_CARD};
+                border-radius: 12px;
+            }}
+        """)
+        v = QVBoxLayout(self._frame_sugerencias)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(6)
+
+        self._lbl_sugerencias_titulo = QLabel("💡 Sugerencias")
+        self._lbl_sugerencias_titulo.setStyleSheet(
+            f"color: {FG_MUTED}; font-size: 9px; background: transparent;"
+        )
+        v.addWidget(self._lbl_sugerencias_titulo)
+
+        self._fila_sugerencias = QHBoxLayout()
+        self._fila_sugerencias.setSpacing(6)
+        v.addLayout(self._fila_sugerencias)
+
+        layout.addWidget(self._frame_sugerencias)
 
     def _construir_chat(self, layout):
         self.area_chat = QTextEdit()
@@ -335,6 +396,85 @@ class AleWidget(QWidget):
             self.refrescar_tarjetas()
 
         threading.Thread(target=trabajo, daemon=True).start()
+
+    # ------------------------------------------------------------
+    # Ventana activa + sugerencias (timer cada 3s)
+    # ------------------------------------------------------------
+
+    def _iniciar_timer_escritorio(self):
+        self._timer_escritorio = QTimer(self)
+        self._timer_escritorio.timeout.connect(self._poll_ventana_activa_async)
+        self._timer_escritorio.start(3000)
+
+    def _poll_ventana_activa_async(self):
+        if self._polling_escritorio:
+            return
+        self._polling_escritorio = True
+
+        def trabajo():
+            try:
+                from skills.control_escritorio import desktop, obtener_sugerencias
+                from core.context_manager import contexto as ctx_global
+                info = desktop.obtener_ventana_activa()
+                app = info.get("app") or ""
+                titulo = info.get("titulo") or ""
+                resumen = desktop.leer_contenido_ventana() if app else ""
+                sugerencias = obtener_sugerencias(app) if app else []
+                ctx_global.actualizar(app, titulo, contenido=resumen)
+                self.senales.ventana_activa.emit(app, titulo, resumen, sugerencias)
+            except Exception:
+                pass
+            finally:
+                self._polling_escritorio = False
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _aplicar_ventana_activa(self, app, titulo, resumen, sugerencias):
+        nombre_display = app.replace(".exe", "") if app else "—"
+        if titulo:
+            self._lbl_ventana_app.setText(f"{nombre_display}  ·  {titulo[:40]}")
+        else:
+            self._lbl_ventana_app.setText(nombre_display or "—")
+
+        self._lbl_ventana_resumen.setText(resumen[:120] if resumen else "Sin información disponible")
+
+        # Actualizar título del panel sugerencias
+        self._lbl_sugerencias_titulo.setText(
+            f"💡 Sugerencias para {nombre_display}" if nombre_display != "—" else "💡 Sugerencias"
+        )
+
+        # Reconstruir botones de sugerencias
+        while self._fila_sugerencias.count():
+            item = self._fila_sugerencias.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        for sug in (sugerencias or [])[:4]:
+            btn = QPushButton(sug)
+            btn.setFixedHeight(26)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: rgba(124, 92, 255, 40);
+                    color: {ACCENT_2};
+                    border-radius: 13px;
+                    padding: 0 10px;
+                    font-size: 9px;
+                    border: 1px solid rgba(124, 92, 255, 80);
+                }}
+                QPushButton:hover {{
+                    background-color: rgba(124, 92, 255, 100);
+                    color: white;
+                }}
+            """)
+            btn.clicked.connect(lambda checked, t=sug: self._inyectar_sugerencia(t))
+            self._fila_sugerencias.addWidget(btn)
+
+        self._fila_sugerencias.addStretch()
+
+    def _inyectar_sugerencia(self, texto: str):
+        """Pone el texto de la sugerencia en el campo y lo envía."""
+        self.entrada.setText(texto)
+        self._enviar_texto()
 
     # ------------------------------------------------------------
     # Tarjetas de resumen

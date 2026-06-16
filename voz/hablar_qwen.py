@@ -92,6 +92,9 @@ _lock        = threading.Lock()
 _modelo      = None
 _disponible  = False
 
+# Tiempo de inactividad antes de descargar (segundos). Default 30 min.
+_TIMEOUT = int(os.environ.get("SOFIA_MODELO_TIMEOUT", "1800"))
+
 
 def _resolver_modelo_id(local: Path, hf_id: str) -> str:
     """Devuelve la ruta local si existe, sino el ID de HuggingFace."""
@@ -141,48 +144,99 @@ def _cargar():
 
 class HabladorQwen:
     def __init__(self):
+        # No carga el modelo al instanciar — lazy loading explícito con cargar()
+        self._timer: threading.Timer | None = None
+
+    # ── Ciclo de vida del modelo ───────────────────────────────────────
+
+    def cargar(self):
+        """Carga el modelo en VRAM. Idempotente si ya está cargado."""
         _cargar()
+
+    def descargar(self):
+        """Libera el modelo de VRAM y limpia la cache de CUDA."""
+        global _modelo, _disponible
+        with _lock:
+            _modelo = None
+            _disponible = False
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        print("[tts] Qwen3-TTS descargado de VRAM")
+
+    def esta_cargado(self) -> bool:
+        return _disponible and _modelo is not None
 
     def disponible(self) -> bool:
         return _disponible
 
+    def _reiniciar_timer(self):
+        """Cancela el timer anterior e inicia uno nuevo de inactividad."""
+        if self._timer is not None:
+            self._timer.cancel()
+        self._timer = threading.Timer(_TIMEOUT, self.descargar)
+        self._timer.daemon = True
+        self._timer.start()
+
+    # ── Generación de audio ────────────────────────────────────────────
+
+    def _generar_wavs(self, texto: str):
+        """Genera audio y devuelve (wavs, sr) sin reproducir."""
+        if MODO == "clon" and _VOZ_REF.exists():
+            import soundfile as sf
+            audio_ref, sr_ref = sf.read(str(_VOZ_REF), dtype="float32")
+            if audio_ref.ndim > 1:
+                audio_ref = audio_ref.mean(axis=1)
+            ref_text_path = _VOZ_REF.parent / "voz_referencia_texto.txt"
+            ref_text = ref_text_path.read_text(encoding="utf-8").strip() \
+                       if ref_text_path.exists() else ""
+            return _modelo.generate_voice_clone(
+                text=texto, language="Spanish",
+                ref_audio=(audio_ref, sr_ref), ref_text=ref_text,
+            )
+        else:
+            return _modelo.generate_custom_voice(
+                text=texto, language="Spanish",
+                speaker=SPEAKER, instruct=INSTRUCCION,
+            )
+
+    def generar_array(self, texto: str):
+        """
+        Genera audio para 'texto' y devuelve (np.ndarray, sample_rate).
+        No reproduce nada. Carga el modelo si es necesario.
+        """
+        import numpy as np
+        self.cargar()
+        if not _disponible or _modelo is None:
+            return None, None
+        with _lock:
+            try:
+                wavs, sr = self._generar_wavs(texto)
+                audio = np.array(wavs[0], dtype=np.float32) \
+                        if not hasattr(wavs[0], "dtype") else wavs[0]
+                return audio, sr
+            except Exception as e:
+                print(f"[tts] Error generando array: {e}")
+                return None, None
+
     def hablar(self, texto: str):
         if not texto or not texto.strip():
             return
+        self.cargar()
         if not _disponible or _modelo is None:
             print(f"[tts] No disponible: {texto}")
             return
 
+        self._reiniciar_timer()
+
         with _lock:
             try:
                 import sounddevice as sd
-                import traceback
-
-                if MODO == "clon" and _VOZ_REF.exists():
-                    import soundfile as sf
-                    import numpy as np
-                    audio_ref, sr_ref = sf.read(str(_VOZ_REF), dtype="float32")
-                    if audio_ref.ndim > 1:
-                        audio_ref = audio_ref.mean(axis=1)
-                    # Leer texto de referencia guardado por el setup
-                    ref_text_path = _VOZ_REF.parent / "voz_referencia_texto.txt"
-                    ref_text = ref_text_path.read_text(encoding="utf-8").strip() \
-                               if ref_text_path.exists() else ""
-                    wavs, sr = _modelo.generate_voice_clone(
-                        text=texto,
-                        language="Spanish",
-                        ref_audio=(audio_ref, sr_ref),
-                        ref_text=ref_text,
-                    )
-                else:
-                    wavs, sr = _modelo.generate_custom_voice(
-                        text=texto,
-                        language="Spanish",
-                        speaker=SPEAKER,
-                        instruct=INSTRUCCION,
-                    )
-
                 import numpy as np
+
+                wavs, sr = self._generar_wavs(texto)
                 audio = np.array(wavs[0], dtype=np.float32) \
                         if not hasattr(wavs[0], "dtype") else wavs[0]
                 sd.play(audio, samplerate=sr)

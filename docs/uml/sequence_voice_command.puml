@@ -1,0 +1,78 @@
+@startuml sequence_voice_command
+title SOFÍA — Diagrama de Secuencia: Comando de voz ("Sofía, ¿qué clima hay?")
+
+actor Usuario
+participant "Escuchador\n(voz.escuchar)" as Escuchador
+participant "main.py" as Main
+participant "AleWidget\n(ui.widget)" as Widget
+participant "Router\n(core.router)" as Router
+participant "skills.clima" as SkillClima
+participant "core.ia" as IA
+participant "voz.hablar" as Hablar
+participant "Open-Meteo API" as OpenMeteo
+
+Usuario -> Escuchador : pronuncia "Sofía, ¿qué clima hay?"
+activate Escuchador
+
+Escuchador -> Escuchador : VAD detecta voz\n+ Whisper "tiny" transcribe
+Escuchador -> Escuchador : detecta wake-word\n("sofia", match difuso)
+Escuchador --> Main : esperar_activacion()\nretorna resto del comando
+
+Main -> Widget : set_estado("Te escucho...")
+Main -> Hablar : hablar_estatico("dime")
+Hablar --> Usuario : reproduce "Dime" (.wav)
+
+par Carga perezosa en hilo de fondo
+  Main -> Escuchador : cargar_whisper_cmd()
+else
+  Main -> Hablar : _ensure_qwen() (si motor=qwen)
+end
+
+alt Resto del comando vacío
+  Main -> Escuchador : escuchar_frase()
+  Escuchador -> Escuchador : VAD + Whisper "base"\ntranscribe comando completo
+  Escuchador --> Main : "qué clima hay"
+end
+
+Main -> Widget : agregar_mensaje("Tú (Sofia)", texto)
+Main -> Main : procesar_comando(texto)
+Main -> Router : procesar(texto)
+activate Router
+
+Router -> Router : _normalizar(texto)\n(sin tildes/puntuación)
+Router -> Router : busca match en KEYWORDS\nde cada skill registrada
+
+Router -> SkillClima : consultar_clima(texto)
+activate SkillClima
+SkillClima -> SkillClima : _extraer_ciudad(texto)
+SkillClima -> OpenMeteo : GET geocodificación + clima
+activate OpenMeteo
+OpenMeteo --> SkillClima : temperatura, descripción
+deactivate OpenMeteo
+SkillClima --> Router : "En Ibagué hay 24°C..."
+deactivate SkillClima
+
+alt Ninguna skill hizo match
+  Router -> IA : preguntar(texto, contexto_extra)
+  activate IA
+  IA -> IA : construye prompt ChatML\n(SYSTEM_PROMPT + /no_think)
+  IA -> IA : llama.cpp infiere\n(Qwen3-8B-Q4_K_M)
+  IA --> Router : respuesta filtrada\n(_es_incoherente)
+  deactivate IA
+end
+
+Router --> Main : respuesta final
+deactivate Router
+
+Main -> Widget : agregar_mensaje("SOFÍA", respuesta)
+Main -> Escuchador : pausar()
+Main -> Hablar : hablar(respuesta)
+activate Hablar
+Hablar --> Usuario : voz sintetizada (pyttsx3/Qwen)
+deactivate Hablar
+Main -> Escuchador : reanudar(retardo=0.35)
+deactivate Escuchador
+
+Main -> Widget : set_estado("Lista")
+
+@enduml

@@ -1,0 +1,81 @@
+@startuml use_cases
+title SOFÍA — Diagrama de Casos de Uso
+
+left to right direction
+skinparam packageStyle rectangle
+
+actor "Usuario" as Usuario
+actor "Sistema Operativo\n(Windows)" as SO
+actor "Servicio Open-Meteo" as OpenMeteo
+actor "Hugging Face Hub" as HF
+actor "Reloj del sistema\n(hilo de alarmas)" as Reloj
+
+rectangle "SOFÍA — Asistente de voz local" {
+
+  usecase "Activar por voz\n(wake-word)"        as UC_Activar
+  usecase "Enviar comando por texto"             as UC_Texto
+  usecase "Enviar comando por voz\n(botón Hablar)" as UC_BotonVoz
+  usecase "Procesar comando\n(Router)"            as UC_Procesar
+  usecase "Consultar clima"                       as UC_Clima
+  usecase "Gestionar agenda\n(eventos/alarmas/tareas)" as UC_Agenda
+  usecase "Consultar hora/fecha"                  as UC_Tiempo
+  usecase "Abrir/cerrar aplicaciones"             as UC_AppCtrl
+  usecase "Gestionar archivos\n(crear/copiar/mover/eliminar)" as UC_Archivos
+  usecase "Escanear aplicaciones instaladas"      as UC_Escanear
+  usecase "Buscar en la Web /\nReproducir YouTube" as UC_Web
+  usecase "Crear y consultar notas"               as UC_Notas
+  usecase "Ejecutar rutina diaria\n(saludo + clima + agenda)" as UC_Rutina
+  usecase "Controlar ventana activa\n(minimizar/maximizar/cerrar)" as UC_Ventana
+  usecase "Resolver referencia implícita\n(\"ciérrala\", \"minimízala\")" as UC_RefImplicita
+  usecase "Leer contenido de ventana activa\n(WhatsApp/Chrome/Notepad/...)" as UC_LeerVentana
+  usecase "Conversar libremente\n(fallback IA local)" as UC_Conversar
+  usecase "Registrar frase fallida /\ncorrección manual" as UC_Aprendizaje
+  usecase "Descargar modelo LLM\n(Qwen3-8B-GGUF)" as UC_DescargarModelo
+  usecase "Sintetizar voz (TTS)"                  as UC_TTS
+  usecase "Disparar alarma programada"            as UC_Alarma
+
+  ' --- Relaciones actor -> caso de uso ---
+  Usuario --> UC_Activar
+  Usuario --> UC_Texto
+  Usuario --> UC_BotonVoz
+  Usuario --> UC_Agenda
+  Usuario --> UC_Notas
+  Usuario --> UC_Aprendizaje
+
+  UC_Activar   ..> UC_Procesar : <<include>>
+  UC_Texto     ..> UC_Procesar : <<include>>
+  UC_BotonVoz  ..> UC_Procesar : <<include>>
+
+  UC_Procesar ..> UC_Clima     : <<include>>
+  UC_Procesar ..> UC_Agenda    : <<include>>
+  UC_Procesar ..> UC_Tiempo    : <<include>>
+  UC_Procesar ..> UC_AppCtrl   : <<include>>
+  UC_Procesar ..> UC_Archivos  : <<include>>
+  UC_Procesar ..> UC_Web       : <<include>>
+  UC_Procesar ..> UC_Notas     : <<include>>
+  UC_Procesar ..> UC_Rutina    : <<include>>
+  UC_Procesar ..> UC_Ventana   : <<include>>
+  UC_Procesar ..> UC_Conversar : <<include>>
+
+  UC_AppCtrl   ..> UC_Escanear     : <<extend>>
+  UC_Rutina    ..> UC_Clima        : <<include>>
+  UC_Rutina    ..> UC_Agenda       : <<include>>
+  UC_Ventana   ..> UC_RefImplicita : <<extend>>
+  UC_Ventana   ..> UC_LeerVentana  : <<extend>>
+  UC_Conversar ..> UC_LeerVentana  : <<extend>>
+  UC_Conversar ..> UC_Aprendizaje  : <<extend>>
+  UC_Conversar ..> UC_DescargarModelo : <<extend>>
+
+  UC_Procesar  ..> UC_TTS : <<include>>
+
+  Reloj --> UC_Alarma
+
+  UC_Clima --> OpenMeteo
+  UC_DescargarModelo --> HF
+  UC_AppCtrl --> SO
+  UC_Archivos --> SO
+  UC_Ventana --> SO
+  UC_Escanear --> SO
+}
+
+@enduml

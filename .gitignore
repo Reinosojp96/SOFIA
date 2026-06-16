@@ -4,6 +4,7 @@ modelos/modelo.gguf
 __pycache__/
 node_modules/
 __pycache__/
+data/
 *.pyc
 *.pyo
 *.pyd

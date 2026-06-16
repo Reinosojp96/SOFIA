@@ -1,0 +1,83 @@
+@startuml components
+title SOFÍA — Diagrama de Componentes
+
+skinparam componentStyle rectangle
+
+package "Punto de entrada" {
+  [main.py] as Main
+}
+
+package "Interfaz de usuario" {
+  [ui.widget\n(AleWidget / PyQt6)] as UI
+}
+
+package "Núcleo (core)" {
+  [core.router\n(Router)] as Router
+  [core.ia\n(Qwen3-8B via llama.cpp)] as IA
+  [core.memoria\n(JSON persistente)] as Memoria
+  [core.context_manager\n(ContextManager)] as Contexto
+}
+
+package "Skills (intents)" {
+  [skills.rutina] as SkillRutina
+  [skills.clima] as SkillClima
+  [skills.tiempo] as SkillTiempo
+  [skills.sistema] as SkillSistema
+  [skills.web] as SkillWeb
+  [skills.notas] as SkillNotas
+  [skills.aprendizaje] as SkillAprendizaje
+  [skills.control_escritorio\n(DesktopController)] as SkillEscritorio
+}
+
+package "Subsistema de voz (voz)" {
+  [voz.escuchar\n(Escuchador: VAD + Whisper)] as Escuchar
+  [voz.hablar\n(fachada TTS)] as Hablar
+  [voz.hablar_qwen\n(HabladorQwen)] as HablarQwen
+}
+
+package "Servicios externos / SO" {
+  [Open-Meteo API] as OpenMeteo
+  [Hugging Face Hub] as HF
+  [Windows (pywinauto / psutil)] as Windows
+  [NebulaNotes\n(~/Documentos/nebula_notes.json)] as NebulaNotes
+}
+
+Main --> UI
+Main --> Router : registra skills
+Main --> Escuchar
+Main --> Hablar
+Main --> Memoria : alarmas (hilo periódico)
+Main --> Contexto
+
+UI --> Main : on_comando / on_hablar_voz
+
+Router --> SkillRutina
+Router --> SkillClima
+Router --> SkillTiempo
+Router --> SkillSistema
+Router --> SkillWeb
+Router --> SkillNotas
+Router --> SkillAprendizaje
+Router --> SkillEscritorio
+Router --> IA : fallback conversacional
+
+SkillRutina --> SkillClima
+SkillRutina --> Memoria
+SkillTiempo --> Memoria
+SkillNotas --> Memoria
+SkillSistema --> Windows
+SkillEscritorio --> Windows
+SkillEscritorio --> Contexto
+SkillClima --> OpenMeteo
+
+Memoria --> NebulaNotes : notas compartidas
+
+IA --> HF : descarga modelo .gguf\n(si falta)
+IA --> SkillAprendizaje : registra fallos/correcciones\n(data/aprendizaje.json)
+
+Escuchar --> Router : texto transcrito
+Hablar --> HablarQwen : motor "qwen"
+UI --> Contexto : polling ventana activa (3s)
+UI --> SkillEscritorio : sugerencias contextuales
+
+@enduml

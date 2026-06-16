@@ -1,0 +1,37 @@
+{
+  "_comentario": "Guion de prueba para herramientas/test_precision.py. 'condicion' agrupa las frases en 3 bloques (silencio, ruido_moderado, distancia) que el script ejecuta por separado, con pausa entre bloques para que el usuario ajuste el entorno. 'skill_esperada' debe coincidir con el nombre con el que la skill se registra en main.registrar_skills() (o 'fallback' para conversación libre con la IA local).",
+  "casos": [
+    {"id": 1, "condicion": "silencio", "categoria": "rutina", "frase_esperada": "buenos días", "skill_esperada": "rutina"},
+    {"id": 2, "condicion": "silencio", "categoria": "clima", "frase_esperada": "qué clima hay en Ibagué", "skill_esperada": "clima"},
+    {"id": 3, "condicion": "silencio", "categoria": "tiempo", "frase_esperada": "qué hora es", "skill_esperada": "tiempo"},
+    {"id": 4, "condicion": "silencio", "categoria": "sistema", "frase_esperada": "abre la calculadora", "skill_esperada": "sistema"},
+    {"id": 5, "condicion": "silencio", "categoria": "web", "frase_esperada": "busca recetas de pasta en google", "skill_esperada": "web"},
+    {"id": 6, "condicion": "silencio", "categoria": "notas", "frase_esperada": "anota comprar pan para la cena", "skill_esperada": "notas"},
+    {"id": 7, "condicion": "silencio", "categoria": "aprendizaje", "frase_esperada": "dame un resumen de uso", "skill_esperada": "aprendizaje"},
+    {"id": 8, "condicion": "silencio", "categoria": "escritorio", "frase_esperada": "minimiza la ventana", "skill_esperada": "escritorio"},
+    {"id": 9, "condicion": "silencio", "categoria": "tiempo", "frase_esperada": "qué tareas pendientes tengo", "skill_esperada": "tiempo"},
+    {"id": 10, "condicion": "silencio", "categoria": "fallback", "frase_esperada": "cuéntame algo interesante sobre el espacio", "skill_esperada": "fallback"},
+
+    {"id": 11, "condicion": "ruido_moderado", "categoria": "rutina", "frase_esperada": "buenas tardes", "skill_esperada": "rutina"},
+    {"id": 12, "condicion": "ruido_moderado", "categoria": "clima", "frase_esperada": "hay lluvia hoy", "skill_esperada": "clima"},
+    {"id": 13, "condicion": "ruido_moderado", "categoria": "tiempo", "frase_esperada": "qué fecha es hoy", "skill_esperada": "tiempo"},
+    {"id": 14, "condicion": "ruido_moderado", "categoria": "sistema", "frase_esperada": "crear carpeta nueva", "skill_esperada": "sistema"},
+    {"id": 15, "condicion": "ruido_moderado", "categoria": "web", "frase_esperada": "reproduce música en youtube", "skill_esperada": "web"},
+    {"id": 16, "condicion": "ruido_moderado", "categoria": "notas", "frase_esperada": "qué dice mi última nota", "skill_esperada": "notas"},
+    {"id": 17, "condicion": "ruido_moderado", "categoria": "tiempo", "frase_esperada": "pon una alarma para las siete", "skill_esperada": "tiempo"},
+    {"id": 18, "condicion": "ruido_moderado", "categoria": "escritorio", "frase_esperada": "qué tienes abierto", "skill_esperada": "escritorio"},
+    {"id": 19, "condicion": "ruido_moderado", "categoria": "sistema", "frase_esperada": "cierra el bloc de notas", "skill_esperada": "sistema"},
+    {"id": 20, "condicion": "ruido_moderado", "categoria": "fallback", "frase_esperada": "qué opinas sobre la inteligencia artificial", "skill_esperada": "fallback"},
+
+    {"id": 21, "condicion": "distancia", "categoria": "rutina", "frase_esperada": "resumen del día", "skill_esperada": "rutina"},
+    {"id": 22, "condicion": "distancia", "categoria": "clima", "frase_esperada": "está soleado o nublado", "skill_esperada": "clima"},
+    {"id": 23, "condicion": "distancia", "categoria": "tiempo", "frase_esperada": "qué tengo agendado", "skill_esperada": "tiempo"},
+    {"id": 24, "condicion": "distancia", "categoria": "sistema", "frase_esperada": "abre visual studio code", "skill_esperada": "sistema"},
+    {"id": 25, "condicion": "distancia", "categoria": "web", "frase_esperada": "dame las noticias de hoy", "skill_esperada": "web"},
+    {"id": 26, "condicion": "distancia", "categoria": "notas", "frase_esperada": "crea una nueva nota", "skill_esperada": "notas"},
+    {"id": 27, "condicion": "distancia", "categoria": "tiempo", "frase_esperada": "recuérdame llamar al médico", "skill_esperada": "tiempo"},
+    {"id": 28, "condicion": "distancia", "categoria": "escritorio", "frase_esperada": "cambiar de ventana", "skill_esperada": "escritorio"},
+    {"id": 29, "condicion": "distancia", "categoria": "aprendizaje", "frase_esperada": "cuántas preguntas no entendiste", "skill_esperada": "aprendizaje"},
+    {"id": 30, "condicion": "distancia", "categoria": "fallback", "frase_esperada": "explícame qué es el efecto invernadero", "skill_esperada": "fallback"}
+  ]
+}

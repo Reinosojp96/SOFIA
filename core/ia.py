@@ -231,6 +231,47 @@ def obtener_estadisticas() -> str:
 # Inferencia
 # ---------------------------------------------------------------------------
 
+def _es_incoherente(respuesta: str) -> bool:
+    """
+    Detecta si la respuesta es incoherente o está en inglés.
+    Señales: empieza con razonamiento visible, mayoría de palabras en inglés,
+    o contiene marcadores del modo thinking de Qwen3.
+    """
+    if not respuesta:
+        return True
+
+    r = respuesta.lower()
+
+    # Razonamiento visible (modo thinking filtrado)
+    frases_pensamiento = [
+        "okay, the user", "let's break", "let me ", "the user is asking",
+        "i need to", "i should", "i'll ", "so the answer", "first,",
+        "this is a", "the context", "based on the",
+    ]
+    if any(r.startswith(f) for f in frases_pensamiento):
+        return True
+
+    # Marcadores internos de Qwen3 thinking
+    if "<think>" in r or "</think>" in r:
+        return True
+
+    # Mayoría de palabras en inglés (heurística simple)
+    palabras_en = {
+        "the", "and", "is", "are", "you", "have", "has", "with", "that",
+        "this", "from", "for", "not", "but", "was", "it", "be", "or",
+        "an", "at", "by", "so", "if", "do", "we", "as", "on", "in",
+        "user", "asking", "okay", "let", "can", "will", "would", "should",
+        "your", "their", "they", "what", "which", "when", "where", "how",
+    }
+    tokens = r.split()
+    if len(tokens) >= 4:
+        en_count = sum(1 for t in tokens if t.strip(".,?!;:") in palabras_en)
+        if en_count / len(tokens) > 0.4:
+            return True
+
+    return False
+
+
 def preguntar(texto: str, contexto_extra: str = "") -> str:
     """
     Pregunta libre a la IA local. Devuelve texto de respuesta.
@@ -243,44 +284,47 @@ def preguntar(texto: str, contexto_extra: str = "") -> str:
         registrar_frase_fallida(texto, razon="sin_modelo")
         return "No tengo el modelo de IA disponible en este momento."
 
-    # Formato de chat Qwen3 (chatml)
-    prompt = (
-        f"<|im_start|>system\n{SYSTEM_PROMPT}<|im_end|>\n"
-        f"<|im_start|>user\n{texto}<|im_end|>\n"
-        f"<|im_start|>assistant\n"
-    )
+    sistema = SYSTEM_PROMPT
     if contexto_extra:
-        # Inyectar contexto en el turno del sistema
-        prompt = (
-            f"<|im_start|>system\n{SYSTEM_PROMPT} "
-            f"Contexto útil: {contexto_extra}<|im_end|>\n"
-            f"<|im_start|>user\n{texto}<|im_end|>\n"
-            f"<|im_start|>assistant\n"
-        )
+        sistema += f" Contexto útil: {contexto_extra}"
+
+    # Formato chatml de Qwen3.
+    # Prefillamos el turno del asistente con <think>\n\n</think>\n para
+    # desactivar el modo "thinking" del modelo y evitar que filtre su
+    # razonamiento interno en inglés.
+    prompt = (
+        f"<|im_start|>system\n{sistema}<|im_end|>\n"
+        f"<|im_start|>user\n{texto} /no_think<|im_end|>\n"
+        f"<|im_start|>assistant\n<think>\n\n</think>\n"
+    )
 
     try:
         salida = _llm(
             prompt,
-            max_tokens=80,          # corto: una frase
+            max_tokens=100,
             temperature=0.5,
-            repeat_penalty=1.3,     # evita repeticiones
+            repeat_penalty=1.3,
             stop=[
-                "<|im_end|>",       # stop nativo de Qwen3
+                "<|im_end|>",
                 "<|im_start|>",
                 "\n\n",
                 "SOFÍA:",
                 "Usuario:",
-                "Answer:",           # evita que cambie al inglés
+                "Answer:",
                 "user\n",
+                "<think>",
             ],
         )
         respuesta = salida["choices"][0]["text"].strip()
-        # Limpiar cualquier artefacto que se cuele igual
-        for tag in ["<|im_end|>", "<|im_start|>", "SOFÍA:", "Answer:"]:
+
+        # Limpiar artefactos de formato
+        for tag in ["<|im_end|>", "<|im_start|>", "SOFÍA:", "Answer:", "</think>", "<think>"]:
             respuesta = respuesta.split(tag)[0].strip()
-        if not respuesta:
-            registrar_frase_fallida(texto, razon="respuesta_vacia")
-            return "No tengo una respuesta para eso."
+
+        if not respuesta or _es_incoherente(respuesta):
+            registrar_frase_fallida(texto, razon="incoherente_o_ingles")
+            return "No entendí eso, ¿puedes decirlo de otra forma?"
+
         return respuesta
     except Exception as e:
         registrar_frase_fallida(texto, razon=f"error_llm: {e}")

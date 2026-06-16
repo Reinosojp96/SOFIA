@@ -1,0 +1,78 @@
+@startuml packages
+title SOFÍA — Diagrama de Paquetes
+
+skinparam packageStyle rectangle
+
+package "main" {
+}
+
+package "ui" {
+  [widget.py]
+}
+
+package "core" {
+  [router.py]
+  [ia.py]
+  [memoria.py]
+  [context_manager.py]
+}
+
+package "skills" {
+  [rutina.py]
+  [clima.py]
+  [tiempo.py]
+  [sistema.py]
+  [web.py]
+  [notas.py]
+  [aprendizaje.py]
+  [control_escritorio.py]
+}
+
+package "voz" {
+  [escuchar.py]
+  [hablar.py]
+  [hablar_qwen.py]
+}
+
+package "data" {
+  [modelo.gguf]
+  [memoria.json]
+  [aprendizaje.json]
+  [audio_estatico/*.wav]
+  [.env]
+}
+
+main ..> ui : crea ventana
+main ..> core : registra skills /\norquesta voz y alarmas
+main ..> voz : captura y síntesis de voz
+main ..> skills : registra (registrar_skills)
+
+ui ..> core : lee contexto / memoria (tarjetas)
+ui ..> skills : sugerencias por app activa
+
+skills ..> core : usa router, memoria,\ncontext_manager
+skills ..> data : memoria.json, aprendizaje.json
+
+voz ..> data : modelo.gguf (vía core.ia),\naudio_estatico/*.wav
+
+core ..> data : persistencia JSON,\ndescarga de modelo
+
+note right of core
+  core es el "kernel" de SOFÍA:
+  router (despacho de intents),
+  ia (LLM local de fallback),
+  memoria (persistencia JSON) y
+  context_manager (estado de
+  escritorio en memoria).
+end note
+
+note right of skills
+  Cada módulo expone
+  KEYWORDS + manejar(texto).
+  Se registran en orden en
+  main.registrar_skills();
+  el orden decide prioridad
+  ante solapamiento de keywords.
+end note
+
+@enduml

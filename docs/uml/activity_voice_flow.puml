@@ -1,0 +1,72 @@
+@startuml activity_voice_flow
+title SOFÍA — Diagrama de Actividades: Flujo de Activación por Voz
+
+start
+
+:Capturar audio del micrófono\n(chunks de 512 muestras, 16kHz);
+
+repeat
+  :Silero-VAD evalúa el chunk;
+  if (¿Probabilidad de voz >= umbral?) then (no)
+    :Descartar chunk (silencio);
+  else (sí)
+    :Acumular chunk en buffer;
+  endif
+repeat while (¿Buffer < 2.5s de segmento?) is (no) not (sí)
+
+:Faster-Whisper "tiny" transcribe\nel segmento corto;
+
+if (¿Contiene "sofia" (exacta o\ndifusa por Levenshtein)?) then (no)
+  :Continuar escuchando;
+  stop
+else (sí)
+endif
+
+:Extraer resto del comando\n(si vino junto a la wake-word);
+
+fork
+  :Reproducir audio estático "Dime"\n(pre-renderizado, sin GPU);
+fork again
+  :Lanzar hilo de carga perezosa\n(Whisper "base" + Qwen-TTS);
+end fork
+
+if (¿El resto del comando\nya vino en la activación?) then (sí)
+  :Esperar hasta 15s a que\ncarguen los modelos;
+else (no)
+  :Escuchar frase completa\n(VAD + límite de 10s);
+  :Esperar hasta 15s a que\ncarguen los modelos;
+endif
+
+if (¿Se obtuvo texto de comando?) then (no)
+  :Informar "No escuché ningún\ncomando, te sigo escuchando";
+  stop
+else (sí)
+endif
+
+:main.procesar_comando(texto);
+:Router normaliza texto\n(sin tildes/puntuación);
+
+repeat
+  :Evaluar siguiente skill registrada\n(rutina, clima, tiempo, sistema,\nweb, notas, aprendizaje, escritorio);
+  if (¿Coincide alguna keyword?) then (sí)
+    :Ejecutar función manejar()\nde la skill;
+    break
+  endif
+repeat while (¿Quedan skills por evaluar?) is (sí) not (no)
+
+if (¿Ninguna skill matcheó?) then (sí)
+  :Fallback: core.ia.preguntar()\nenriquecido con contexto de escritorio;
+else (no)
+endif
+
+:Mostrar respuesta en la UI\n(widget.agregar_mensaje);
+
+:Pausar micrófono (anti-feedback);
+:Sintetizar voz (TTS:\npyttsx3 o Qwen3-TTS);
+:Reanudar micrófono\n(retardo ~0.35s);
+
+:Volver al estado "Lista";
+
+stop
+
+@enduml
