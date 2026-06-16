@@ -443,9 +443,20 @@ def paso8_modelos(directorio: Path, hw: dict, prefs: dict):
     # ── Silero-VAD ──
     try:
         import torch
+        # Mismo directorio que usa voz/escuchar.py (_DIR_TORCH_HUB) — si no
+        # se fija aquí, torch usa su caché por defecto y la app vuelve a
+        # descargar el modelo en el primer arranque, dejando esta
+        # predescarga sin efecto.
+        torch_hub_dir = data_dir / "modelos" / "torch_hub"
+        torch_hub_dir.mkdir(parents=True, exist_ok=True)
+        torch.hub.set_dir(str(torch_hub_dir))
         with Spinner("Silero-VAD..."):
+            # trust_repo=True evita el prompt interactivo "¿confías en este
+            # repo? (y/N)" de torch.hub, que usa el input() nativo de Python
+            # (no el de este módulo) y por eso nunca llegaba al protocolo
+            # de la GUI — se quedaba esperando para siempre.
             torch.hub.load("snakers4/silero-vad","silero_vad",
-                           force_reload=False, onnx=False)
+                           force_reload=False, onnx=False, trust_repo=True)
         ok("Silero-VAD listo.")
     except Exception as e:
         warn(f"No se pudo predescargar Silero-VAD: {e}")
