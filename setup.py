@@ -328,15 +328,25 @@ def _guardar_estado(directorio: Path, hw: dict, prefs: dict):
     return ruta
 
 
-def fase1():
+def fase1(desde_bootstrap=False):
     print(f"\n{C.BOLD}{C.BLUE}{'='*55}")
     print("       SOFÍA — Instalador v2.0")
     print(f"{'='*55}{C.RESET}")
     info(f"Python {sys.version_info.major}.{sys.version_info.minor} · {platform.system()}")
 
-    directorio = paso1_directorio()
-    paso2_codigo(directorio)
-    python, pip = paso3_venv(directorio)
+    if desde_bootstrap:
+        # El bootstrap ya descargó el código, creó el venv y dejó instaladas
+        # las dependencias base (torch, llama-cpp-python, PyQt6, psutil) con
+        # el Python del venv, que es el que está ejecutando este script ahora.
+        info("Continuando instalación iniciada por el bootstrap...")
+        directorio = Path(__file__).parent.resolve()
+        ok(f"Directorio: {directorio}")
+        python = Path(sys.executable)
+        pip    = python.parent / ("pip.exe" if IS_WIN else "pip")
+    else:
+        directorio = paso1_directorio()
+        paso2_codigo(directorio)
+        python, pip = paso3_venv(directorio)
     hw    = paso4_hardware_basico()
     prefs = paso5_preferencias(hw)
     paso6_dependencias(pip, hw, prefs)

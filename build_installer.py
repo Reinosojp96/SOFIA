@@ -16,6 +16,14 @@ import sys
 import os
 from pathlib import Path
 
+# Evita UnicodeEncodeError al imprimir ✓/✗ en consolas Windows con
+# codificación cp1252 (mismo problema que mitiga instalar_sofia.py).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 NOMBRE_EXE = "Instalar_SOFIA"
 SCRIPT     = "instalar_sofia.py"
 ICONO      = "ui/icon.ico"          # opcional, omitir si no existe
@@ -26,6 +34,7 @@ def build():
         "--onefile",                            # un solo .exe
         "--console",                            # mostrar consola (es un instalador)
         "--clean",
+        "--uac-admin",                          # pide elevación UAC al ejecutar
         f"--name={NOMBRE_EXE}",
         "--hidden-import=urllib.request",
         "--hidden-import=zipfile",

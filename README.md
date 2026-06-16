@@ -13,7 +13,28 @@ latencia, recursos, falsos despertares, estrés), ver
 
 ## Instalación
 
-### Camino recomendado: instalador
+### Camino más fácil: `Instalar_SOFIA.exe`
+
+Para usuarios que no quieren clonar el repo a mano: descarga y ejecuta
+`Instalar_SOFIA.exe` (se genera con `python build_installer.py` a partir
+de `instalar_sofia.py`). Hace todo automáticamente — descarga el código,
+crea el venv, instala dependencias base y lanza el instalador completo
+(`setup.py`).
+
+Requisitos antes de ejecutarlo:
+- **Python 3.10, 3.11 o 3.12 instalado en el sistema**, con "Add Python
+  to PATH" marcado durante su instalación. El `.exe` no trae su propio
+  Python — solo lo usa para crear el entorno virtual del proyecto. Si no
+  encuentra ninguno compatible, te avisa y te da el enlace de descarga.
+- El `.exe` pedirá **permiso de administrador (UAC)** al abrirse, porque
+  por defecto instala en `C:\ProgramData\SOFIA`. Si prefieres no dar
+  permisos de admin, ejecuta `python instalar_sofia.py` directamente y
+  elige una carpeta dentro de tu perfil de usuario cuando te lo pregunte.
+- Windows Defender/SmartScreen puede mostrar una advertencia la primera
+  vez porque el `.exe` no está firmado digitalmente. Es seguro continuar:
+  "Más información" → "Ejecutar de todas formas".
+
+### Camino recomendado (con el repo ya clonado): instalador
 
 ```bash
 python setup.py

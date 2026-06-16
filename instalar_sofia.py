@@ -28,9 +28,18 @@ import urllib.error
 from pathlib import Path
 
 # ─────────────────────────────────────────────
-# Verificación de versión ANTES de cualquier import
+# Frozen (.exe de PyInstaller) vs script normal
 # ─────────────────────────────────────────────
-if sys.version_info < (3, 10) or sys.version_info >= (3, 13):
+# Si está "frozen", sys.executable apunta al propio bootloader del .exe,
+# NO a un Python real — por eso la verificación de versión y la creación
+# del venv no pueden basarse en sys.executable/sys.version_info aquí.
+# Ver localizar_python_sistema() más abajo.
+FROZEN = getattr(sys, "frozen", False)
+
+# ─────────────────────────────────────────────
+# Verificación de versión ANTES de cualquier import (solo si NO está frozen)
+# ─────────────────────────────────────────────
+if not FROZEN and (sys.version_info < (3, 10) or sys.version_info >= (3, 13)):
     print("=" * 55)
     print("  ERROR: SOFÍA requiere Python 3.10, 3.11 o 3.12")
     print(f"  Tienes Python {sys.version_info.major}.{sys.version_info.minor}")
@@ -72,7 +81,9 @@ else:
 # ─────────────────────────────────────────────
 # Colores (solo si la terminal los soporta)
 # ─────────────────────────────────────────────
-_COLOR = IS_WIN and os.environ.get("TERM") or not IS_WIN
+# os.system("") ya activa el modo VT100 en consolas modernas de Windows
+# (10+, mínimo soportado), así que no dependemos de la variable TERM.
+_COLOR = True
 
 class C:
     RESET  = "\033[0m"  if _COLOR else ""
@@ -141,6 +152,74 @@ class Progreso:
                   end="", flush=True)
         else:
             print(f"\r  Descargando {self.descripcion}...", end="", flush=True)
+
+# ─────────────────────────────────────────────
+# PASO 0 — Localizar un Python real del sistema (3.10–3.12)
+# ─────────────────────────────────────────────
+def _version_de(candidato) -> tuple | None:
+    """Ejecuta <candidato> -c "..." y devuelve (major, minor) o None si falla."""
+    try:
+        r = subprocess.run(
+            list(candidato) + ["-c", "import sys; print(sys.version_info[0], sys.version_info[1])"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            maj, mn = r.stdout.strip().split()
+            return (int(maj), int(mn))
+    except Exception:
+        pass
+    return None
+
+
+def localizar_python_sistema() -> Path | None:
+    """
+    Devuelve la ruta a un Python 3.10-3.12 real instalado en el sistema.
+
+    Si no estamos "frozen" (corriendo como .py), basta con sys.executable.
+    Si estamos frozen (.exe de PyInstaller), sys.executable apunta al
+    propio bootloader del .exe, no a un Python real, así que hay que
+    buscarlo: lanzador "py", luego "python"/"python3" en el PATH, y por
+    último ubicaciones típicas de instalación en Windows.
+    """
+    if not FROZEN:
+        return Path(sys.executable)
+
+    candidatos = []
+    if IS_WIN:
+        for v in ("3.12", "3.11", "3.10"):
+            candidatos.append(["py", f"-{v}"])
+        candidatos.append(["py", "-3"])
+    candidatos.append(["python"])
+    candidatos.append(["python3"])
+
+    if IS_WIN:
+        local_appdata = os.environ.get("LocalAppData", "")
+        if local_appdata:
+            base = Path(local_appdata) / "Programs" / "Python"
+            for nombre in ("Python312", "Python311", "Python310"):
+                exe = base / nombre / "python.exe"
+                if exe.exists():
+                    candidatos.append([str(exe)])
+
+    for candidato in candidatos:
+        ver = _version_de(candidato)
+        if ver and (3, 10) <= ver <= (3, 12):
+            # Resolver a la ruta real del ejecutable (sys.executable del candidato)
+            try:
+                r = subprocess.run(
+                    list(candidato) + ["-c", "import sys; print(sys.executable)"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    return Path(r.stdout.strip())
+            except Exception:
+                pass
+            # Si el candidato ya era una ruta directa a python.exe, usarla
+            if len(candidato) == 1 and Path(candidato[0]).exists():
+                return Path(candidato[0])
+
+    return None
+
 
 # ─────────────────────────────────────────────
 # PASO 1 — Verificar / detectar CUDA
@@ -253,7 +332,7 @@ def extraer_repo(zip_path: Path, directorio: Path) -> bool:
 # ─────────────────────────────────────────────
 # PASO 4 — Crear venv
 # ─────────────────────────────────────────────
-def crear_venv(directorio: Path):
+def crear_venv(directorio: Path, python_sistema: Path):
     titulo("Creando entorno virtual")
     venv_dir = directorio / "venv"
 
@@ -262,7 +341,7 @@ def crear_venv(directorio: Path):
     else:
         with Spinner("Creando venv..."):
             r = subprocess.run(
-                [sys.executable, "-m", "venv", str(venv_dir)],
+                [str(python_sistema), "-m", "venv", str(venv_dir)],
                 capture_output=True, text=True
             )
         if r.returncode != 0:
@@ -386,6 +465,22 @@ def main():
     print(f"\n  {C.CYAN}Python {sys.version_info.major}.{sys.version_info.minor}{C.RESET}"
           f"  ·  {platform.system()} {platform.release()}")
 
+    # Localizar un Python real del sistema (necesario para crear el venv
+    # del proyecto; si estamos frozen, sys.executable no sirve para esto)
+    titulo("Buscando Python instalado")
+    python_sistema = localizar_python_sistema()
+    if python_sistema is None:
+        error("No se encontró un Python 3.10, 3.11 o 3.12 instalado en tu sistema.")
+        error("SOFÍA necesita uno para crear su propio entorno virtual.")
+        print()
+        info("Descarga Python 3.11 en:")
+        info("https://www.python.org/downloads/")
+        print()
+        info("IMPORTANTE: marca 'Add Python to PATH' durante la instalación.")
+        input("\n  Presiona Enter para cerrar...")
+        sys.exit(1)
+    ok(f"Python encontrado: {python_sistema}")
+
     # Detectar GPU/CUDA antes de preguntar directorio
     titulo("Detectando hardware")
     cuda_tag = detectar_cuda()
@@ -428,7 +523,7 @@ def main():
         pass
 
     # Crear venv
-    python, pip = crear_venv(directorio)
+    python, pip = crear_venv(directorio, python_sistema)
 
     # Instalar dependencias base
     instalar_dependencias(pip, python, cuda_tag)
