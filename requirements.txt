@@ -35,3 +35,4 @@ PyQt6
 
 psutil>=5.9                 # detección de procesos activos
 pywinauto>=0.6.8            # accesibilidad UIA para leer/controlar ventanas (Windows)
+pyinstaller
