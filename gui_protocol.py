@@ -21,7 +21,12 @@ GUI_MODE = os.environ.get("SOFIA_GUI") == "1"
 
 def pedir(prompt: str = "") -> str:
     if GUI_MODE:
-        sys.stdout.write(f"@@ASK@@{prompt}\n")
+        # El protocolo manda una línea por mensaje: cualquier salto de
+        # línea incrustado en el prompt (común en los input() del setup,
+        # ej. "\n  ¿Cómo te llamas?...") rompe el parseo en la GUI, así
+        # que se colapsa a espacios antes de enviarlo.
+        prompt_plano = " ".join(prompt.splitlines()).strip()
+        sys.stdout.write(f"@@ASK@@{prompt_plano}\n")
         sys.stdout.flush()
         return sys.stdin.readline().rstrip("\n")
     return input(prompt)
