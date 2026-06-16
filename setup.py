@@ -150,6 +150,20 @@ def paso1_directorio() -> Path:
     entrada = input("\n  Directorio (Enter para el defecto): ").strip()
     directorio = Path(entrada) if entrada else defecto
     directorio.mkdir(parents=True, exist_ok=True)
+    if IS_WIN:
+        # ProgramData requiere permisos elevados para escribir; sin esto,
+        # la app falla con "Permission denied" en cada ejecución normal
+        # (no elevada) al intentar guardar memoria.json, aprendizaje.json, etc.
+        try:
+            usuario = os.environ.get("USERNAME", "")
+            if usuario:
+                subprocess.run(
+                    ["icacls", str(directorio), "/grant",
+                     f"{usuario}:(OI)(CI)M", "/T"],
+                    capture_output=True, text=True, timeout=30,
+                )
+        except Exception as e:
+            warn(f"No se pudo ajustar permisos de {directorio}: {e}")
     ok(f"Directorio: {directorio}")
     return directorio
 
@@ -462,9 +476,19 @@ def paso8_modelos(directorio: Path, hw: dict, prefs: dict):
         warn(f"No se pudo predescargar Silero-VAD: {e}")
 
     # ── Qwen3-TTS ──
+    def _descarga_completa(carpeta: Path) -> bool:
+        # any(iterdir()) no basta: una descarga interrumpida (p.ej. por el
+        # "Permission denied" en ProgramData) deja config.json suelto y el
+        # instalador la daba por completa, dejando el TTS roto para siempre.
+        if not carpeta.exists():
+            return False
+        return any(carpeta.glob("*.safetensors")) or \
+               any(carpeta.glob("pytorch_model.bin")) or \
+               any(carpeta.glob("model.safetensors.index.json"))
+
     if prefs["tts"] == "qwen":
         tts_dir = data_dir / "qwen3_tts"
-        if tts_dir.exists() and any(tts_dir.iterdir()):
+        if _descarga_completa(tts_dir):
             info("Qwen3-TTS CustomVoice ya descargado.")
         elif si_no("¿Descargar Qwen3-TTS 0.6B ahora? (~1.2 GB)", defecto=True):
             try:
@@ -483,7 +507,7 @@ def paso8_modelos(directorio: Path, hw: dict, prefs: dict):
         # Modelo Base — necesario para clonación de voz
         # Se descarga aquí para que no haya descarga al primer arranque
         tts_base_dir = data_dir / "qwen3_tts_base"
-        if tts_base_dir.exists() and any(tts_base_dir.iterdir()):
+        if _descarga_completa(tts_base_dir):
             info("Qwen3-TTS Base ya descargado.")
         elif si_no("¿Descargar Qwen3-TTS Base 0.6B? (~1.8 GB, necesario para clonar voz)", defecto=True):
             try:
