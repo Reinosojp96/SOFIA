@@ -62,6 +62,15 @@ class Spinner:
     def __enter__(self):
         if GUI_MODE:
             print(f"  {self._msg}", flush=True)
+            self._activo = True
+            inicio = time.time()
+            def _latido():
+                while self._activo:
+                    time.sleep(6)
+                    if self._activo:
+                        print(f"  … {self._msg} (llevamos {int(time.time()-inicio)}s)", flush=True)
+            self._hilo = threading.Thread(target=_latido, daemon=True)
+            self._hilo.start()
             return self
         frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
         self._activo = True

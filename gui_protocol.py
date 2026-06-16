@@ -35,3 +35,26 @@ def pedir(prompt: str = "") -> str:
 def progreso(actual: int, total: int):
     if GUI_MODE:
         print(f"@@PROGRESS@@{actual}/{total}", flush=True)
+
+
+def crear_tqdm_gui():
+    """Clase tqdm que reporta progreso real al protocolo de la GUI en vez
+    de dibujar una barra ASCII. Pensada para pasarla como `tqdm_class=`
+    a huggingface_hub.snapshot_download/hf_hub_download, que sí conocen
+    el tamaño total del archivo (a diferencia de Whisper/Silero-VAD, que
+    no expone esa información y solo recibe el "latido" del Spinner)."""
+    import os
+    from tqdm.auto import tqdm as _tqdm
+
+    class _GuiTqdm(_tqdm):
+        def __init__(self, *args, **kwargs):
+            kwargs["file"] = open(os.devnull, "w")
+            super().__init__(*args, **kwargs)
+
+        def update(self, n=1):
+            resultado = super().update(n)
+            if self.total:
+                progreso(self.n, self.total)
+            return resultado
+
+    return _GuiTqdm

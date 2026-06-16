@@ -15,7 +15,7 @@ Requiere: Python 3.10-3.12
 import os, sys, subprocess, platform, shutil, threading, time, json, argparse
 from pathlib import Path
 
-from gui_protocol import GUI_MODE, pedir as input, progreso as _gui_progreso
+from gui_protocol import GUI_MODE, pedir as input, progreso as _gui_progreso, crear_tqdm_gui
 
 # ─────────────────────────────────────────────
 # Verificación de versión (solo en fase 1)
@@ -59,9 +59,20 @@ class Spinner:
         self._msg = msg; self._activo = False; self._hilo = None
     def __enter__(self):
         if GUI_MODE:
-            # Sin animación: una sola línea de log, sin \r (la GUI lee
-            # línea por línea y no necesita verla "moverse").
+            # Sin animación de consola: en vez de eso, un latido cada
+            # pocos segundos para que la GUI sepa que sigue viva (si no,
+            # parece colgada durante descargas largas sin progreso byte
+            # a byte, como Whisper o Silero-VAD).
             print(f"  {self._msg}", flush=True)
+            self._activo = True
+            inicio = time.time()
+            def _latido():
+                while self._activo:
+                    time.sleep(6)
+                    if self._activo:
+                        print(f"  … {self._msg} (llevamos {int(time.time()-inicio)}s)", flush=True)
+            self._hilo = threading.Thread(target=_latido, daemon=True)
+            self._hilo.start()
             return self
         frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
         self._activo = True
@@ -447,10 +458,12 @@ def paso8_modelos(directorio: Path, hw: dict, prefs: dict):
         elif si_no("¿Descargar Qwen3-TTS 0.6B ahora? (~1.2 GB)", defecto=True):
             try:
                 from huggingface_hub import snapshot_download
+                kwargs = {"tqdm_class": crear_tqdm_gui()} if GUI_MODE else {}
                 with Spinner("Descargando Qwen3-TTS 0.6B CustomVoice..."):
                     snapshot_download(
                         repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-                        local_dir=str(tts_dir)
+                        local_dir=str(tts_dir),
+                        **kwargs,
                     )
                 ok("Qwen3-TTS CustomVoice descargado.")
             except Exception as e:
@@ -464,10 +477,12 @@ def paso8_modelos(directorio: Path, hw: dict, prefs: dict):
         elif si_no("¿Descargar Qwen3-TTS Base 0.6B? (~1.8 GB, necesario para clonar voz)", defecto=True):
             try:
                 from huggingface_hub import snapshot_download
+                kwargs = {"tqdm_class": crear_tqdm_gui()} if GUI_MODE else {}
                 with Spinner("Descargando Qwen3-TTS 0.6B Base..."):
                     snapshot_download(
                         repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-                        local_dir=str(tts_base_dir)
+                        local_dir=str(tts_base_dir),
+                        **kwargs,
                     )
                 ok("Qwen3-TTS Base descargado.")
             except Exception as e:
