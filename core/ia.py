@@ -35,9 +35,9 @@ MODEL_PATH = (
 
 SYSTEM_PROMPT = (
     "Eres SOFÍA, una asistente de voz en español. "
-    "Responde SIEMPRE en UNA sola frase corta, sin markdown, sin listas, "
-    "sin repetir texto, sin traducir al inglés. "
-    "Si no sabes algo, dilo en una frase."
+    "Responde SIEMPRE en español, en UNA sola frase corta, sin markdown, sin listas, "
+    "sin repetir texto. NUNCA uses inglés, chino, ni ningún otro idioma. "
+    "Si no sabes algo, dilo en español en una frase."
 )
 
 # Ruta del archivo de aprendizaje
@@ -255,6 +255,11 @@ def _es_incoherente(respuesta: str) -> bool:
     if "<think>" in r or "</think>" in r:
         return True
 
+    # Caracteres CJK (chino, japonés, coreano) — respuesta inválida
+    import unicodedata
+    if any(unicodedata.category(c) in ("Lo",) and "一" <= c <= "鿿" for c in respuesta):
+        return True
+
     # Mayoría de palabras en inglés (heurística simple)
     palabras_en = {
         "the", "and", "is", "are", "you", "have", "has", "with", "that",
@@ -302,12 +307,13 @@ def preguntar(texto: str, contexto_extra: str = "") -> str:
         salida = _llm(
             prompt,
             max_tokens=100,
-            temperature=0.5,
+            temperature=0.3,
             repeat_penalty=1.3,
             stop=[
                 "<|im_end|>",
                 "<|im_start|>",
                 "\n\n",
+                "\n",
                 "SOFÍA:",
                 "Usuario:",
                 "Answer:",
