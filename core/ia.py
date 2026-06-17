@@ -114,9 +114,11 @@ def _cargar():
     if _llm is not None:
         return
     
-    # Intentar descargar el modelo si no existe
-    if not _descargar_modelo():
-        print(f"[ia] No se pudo obtener el modelo")
+    # Si el modelo no existe, no intentar descargarlo en tiempo de ejecución.
+    # La descarga debe hacerse durante la instalación (setup.py paso 8).
+    if not os.path.exists(MODEL_PATH):
+        print(f"[ia] Modelo no encontrado en {MODEL_PATH}.")
+        print(f"[ia] Ejecuta el instalador (setup.py) para descargarlo.")
         _disponible = False
         return
     

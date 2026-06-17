@@ -538,18 +538,19 @@ def paso8_modelos(directorio: Path, hw: dict, prefs: dict):
         info(f"LLM recomendado: {desc_llm}")
         if espacio < 6:
             warn(f"Solo {espacio} GB libres — el modelo puede no caber.")
+        info("Descargando modelo LLM (obligatorio para respuestas conversacionales)...")
 
-        if si_no(f"¿Descargar {desc_llm}?", defecto=True):
-            import urllib.request
-            barra = BarraProgreso()
-            def cb(bloques, tam, total):
-                barra.total = total; barra.actualizar(bloques * tam)
-            try:
-                urllib.request.urlretrieve(url_llm, str(modelo_llm), reporthook=cb)
-                print(); ok("Modelo LLM descargado.")
-            except Exception as e:
-                print(); error(f"Error: {e}")
-                if modelo_llm.exists(): modelo_llm.unlink()
+        import urllib.request
+        barra = BarraProgreso()
+        def cb(bloques, tam, total):
+            barra.total = total; barra.actualizar(bloques * tam)
+        try:
+            urllib.request.urlretrieve(url_llm, str(modelo_llm), reporthook=cb)
+            print(); ok("Modelo LLM descargado.")
+        except Exception as e:
+            print(); error(f"Error descargando el modelo: {e}")
+            warn("SOFÍA arrancará sin IA conversacional. Puedes descargarlo manualmente.")
+            if modelo_llm.exists(): modelo_llm.unlink()
 
     ok("Modelos listos.")
 
