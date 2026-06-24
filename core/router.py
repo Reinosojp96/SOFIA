@@ -52,6 +52,7 @@ class Router:
             # Normalizamos también las keywords para matching sin tildes
             if any(_quitar_tildes(kw) in texto_norm for kw in keywords):
                 self._contadores[nombre] += 1
+                print(f"[ROUTER] texto={texto_norm!r} → skill={nombre!r}")  # DEBUG
                 try:
                     return funcion(texto_norm)
                 except Exception as e:

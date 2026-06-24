@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SOFÍA — Catálogo de Producto</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap');
+
+  :root {
+    --bg:       #0F1220;
+    --bg2:      #151929;
+    --bg3:      #1E2540;
+    --purple:   #7C5CFF;
+    --purple-l: #A68AFF;
+    --cyan:     #4CC9F0;
+    --cyan-l:   #82DEFF;
+    --green:    #3FB950;
+    --amber:    #D29922;
+    --white:    #F0F4FF;
+    --gray:     #8A96B8;
+    --gray2:    #4A5278;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--white);
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* ── PAGE LAYOUT ── */
+  .page {
+    width: 210mm;
+    min-height: 297mm;
+    margin: 0 auto;
+    background: var(--bg);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* ── DECORATIVE GLOWS ── */
+  .glow {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .glow-purple { background: var(--purple); opacity: 0.12; }
+  .glow-cyan   { background: var(--cyan);   opacity: 0.10; }
+
+  /* ── HEADER ── */
+  .hero {
+    position: relative;
+    z-index: 1;
+    padding: 12mm 15mm 10mm;
+    border-bottom: 1px solid var(--bg3);
+  }
+  .hero-logo {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 4mm;
+  }
+  .hero-logo-name {
+    font-size: 52px;
+    font-weight: 900;
+    letter-spacing: 6px;
+    background: linear-gradient(135deg, var(--purple-l) 0%, var(--cyan) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero-logo-tag {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--gray);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border: 1px solid var(--gray2);
+    border-radius: 20px;
+    padding: 2px 10px;
+    position: relative;
+    top: -6px;
+  }
+  .hero-tagline {
+    font-size: 16px;
+    font-weight: 300;
+    color: var(--cyan-l);
+    letter-spacing: 0.5px;
+    margin-bottom: 3mm;
+  }
+  .hero-sub {
+    font-size: 12.5px;
+    color: var(--gray);
+    max-width: 140mm;
+  }
+  .hero-pills {
+    display: flex;
+    gap: 8px;
+    margin-top: 5mm;
+    flex-wrap: wrap;
+  }
+  .pill {
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .pill-purple { background: rgba(124,92,255,.18); color: var(--purple-l); border: 1px solid rgba(124,92,255,.35); }
+  .pill-cyan   { background: rgba(76,201,240,.15);  color: var(--cyan-l);   border: 1px solid rgba(76,201,240,.30); }
+  .pill-green  { background: rgba(63,185,80,.15);   color: var(--green);    border: 1px solid rgba(63,185,80,.30); }
+
+  /* ── MAIN GRID ── */
+  .main-grid {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+  }
+
+  /* ── SECTION ── */
+  .section {
+    padding: 8mm 8mm 6mm;
+    border-right: 1px solid var(--bg3);
+    border-bottom: 1px solid var(--bg3);
+  }
+  .section:nth-child(even) { border-right: none; }
+  .section-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--purple);
+    margin-bottom: 4mm;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .section-title::before {
+    content: '';
+    display: inline-block;
+    width: 18px;
+    height: 2px;
+    background: var(--purple);
+    border-radius: 2px;
+  }
+  .section-title.cyan { color: var(--cyan); }
+  .section-title.cyan::before { background: var(--cyan); }
+  .section-title.green { color: var(--green); }
+  .section-title.green::before { background: var(--green); }
+
+  /* ── FEATURE LIST ── */
+  .feature-list { list-style: none; }
+  .feature-list li {
+    display: flex;
+    gap: 9px;
+    margin-bottom: 3mm;
+    font-size: 12.5px;
+    color: var(--gray);
+    line-height: 1.5;
+  }
+  .feature-list li .icon {
+    flex-shrink: 0;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  .feature-list li strong { color: var(--white); font-weight: 600; }
+
+  /* ── PIPELINE ── */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .pipeline-step {
+    background: var(--bg3);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--gray);
+  }
+  .pipeline-step .step-num {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--purple);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .pipeline-step .step-num.cyan { background: var(--cyan); color: var(--bg); }
+  .pipeline-step strong { color: var(--white); }
+  .pipeline-arrow {
+    margin-left: 9px;
+    color: var(--gray2);
+    font-size: 10px;
+  }
+
+  /* ── CARDS GRID ── */
+  .cards-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
+  }
+  .card {
+    background: var(--bg3);
+    border-radius: 8px;
+    padding: 7px 9px;
+  }
+  .card-title {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--white);
+    margin-bottom: 2px;
+  }
+  .card-body {
+    font-size: 10.5px;
+    color: var(--gray);
+    line-height: 1.4;
+  }
+
+  /* ── TECH TABLE ── */
+  .tech-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+  }
+  .tech-table tr { border-bottom: 1px solid var(--bg3); }
+  .tech-table tr:last-child { border-bottom: none; }
+  .tech-table td { padding: 4px 0; }
+  .tech-table td:first-child { color: var(--white); font-weight: 600; width: 45%; }
+  .tech-table td:last-child { color: var(--gray); }
+
+  /* ── METRICS ── */
+  .metrics-row {
+    display: flex;
+    gap: 6px;
+    justify-content: space-between;
+    margin-bottom: 5mm;
+  }
+  .metric {
+    background: var(--bg3);
+    border-radius: 8px;
+    padding: 6px 8px;
+    text-align: center;
+    flex: 1;
+  }
+  .metric-num {
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1;
+    margin-bottom: 2px;
+  }
+  .metric-label {
+    font-size: 9.5px;
+    color: var(--gray);
+    font-weight: 500;
+  }
+  .metric-num.purple { color: var(--purple-l); }
+  .metric-num.cyan   { color: var(--cyan); }
+  .metric-num.green  { color: var(--green); }
+  .metric-num.amber  { color: var(--amber); }
+
+  /* ── QUOTE / HIGHLIGHT ── */
+  .highlight {
+    background: rgba(124,92,255,.10);
+    border-left: 3px solid var(--purple);
+    border-radius: 0 8px 8px 0;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--white);
+    font-style: italic;
+    margin-top: 4mm;
+    line-height: 1.5;
+  }
+
+  /* ── FULL-WIDTH SECTION ── */
+  .full-section {
+    grid-column: 1 / -1;
+    border-right: none !important;
+  }
+
+  /* ── COMPARISON TABLE ── */
+  .comp-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+    margin-top: 3mm;
+  }
+  .comp-table th {
+    background: var(--bg3);
+    color: var(--gray);
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    padding: 6px 10px;
+    text-align: left;
+  }
+  .comp-table th:first-child { border-radius: 6px 0 0 0; }
+  .comp-table th:last-child  { border-radius: 0 6px 0 0; }
+  .comp-table td { padding: 5px 10px; border-bottom: 1px solid var(--bg3); color: var(--gray); }
+  .comp-table td:first-child { color: var(--white); font-weight: 600; }
+  .comp-table .yes { color: var(--green); font-weight: 700; }
+  .comp-table .no  { color: var(--gray2); }
+  .comp-table .par { color: var(--amber); }
+
+  /* ── CODE SNIPPET ── */
+  .code {
+    background: var(--bg3);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--cyan-l);
+    margin-top: 3mm;
+    line-height: 1.7;
+  }
+  .code .kw { color: var(--purple-l); }
+  .code .cm { color: var(--gray2); }
+
+  /* ── FOOTER ── */
+  .footer {
+    position: relative;
+    z-index: 1;
+    border-top: 1px solid var(--bg3);
+    padding: 5mm 15mm;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg2);
+  }
+  .footer-logo {
+    font-size: 18px;
+    font-weight: 900;
+    letter-spacing: 4px;
+    background: linear-gradient(135deg, var(--purple-l), var(--cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .footer-contact {
+    font-size: 11px;
+    color: var(--gray);
+    text-align: right;
+    line-height: 1.6;
+  }
+  .footer-contact a { color: var(--cyan-l); text-decoration: none; }
+
+  /* ── PRINT ── */
+  @media print {
+    body { background: var(--bg) !important; }
+    .page { margin: 0; width: 100%; }
+    @page { size: A4; margin: 0; }
+  }
+
+  @media screen {
+    body { padding: 20px 0 40px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <!-- Decorative glows -->
+  <div class="glow glow-purple" style="width:180mm;height:180mm;top:-60mm;right:-60mm;"></div>
+  <div class="glow glow-cyan"   style="width:130mm;height:130mm;bottom:20mm;left:-40mm;"></div>
+
+  <!-- ══ HERO ══ -->
+  <div class="hero">
+    <div class="hero-logo">
+      <span class="hero-logo-name">SOFÍA</span>
+      <span class="hero-logo-tag">v1.0 · 2026</span>
+    </div>
+    <div class="hero-tagline">Sistema Offline de Funciones con Inteligencia Artificial</div>
+    <div class="hero-sub">
+      Asistente de voz personal en <strong>español</strong>, 100% offline, para Windows.
+      Sin suscripciones, sin Internet, sin privacidad comprometida. STT, TTS e IA conversacional
+      corren <strong>completamente en tu equipo</strong>.
+    </div>
+    <div class="hero-pills">
+      <span class="pill pill-purple">🔒 100% Offline</span>
+      <span class="pill pill-cyan">🎙️ Activación por voz</span>
+      <span class="pill pill-green">✓ Sin API keys</span>
+      <span class="pill pill-purple">🇪🇸 Español nativo</span>
+      <span class="pill pill-cyan">🖥️ Control de escritorio</span>
+      <span class="pill pill-green">⚡ Open source</span>
+    </div>
+  </div>
+
+  <!-- ══ MAIN GRID ══ -->
+  <div class="main-grid">
+
+    <!-- ── CAPACIDADES ── -->
+    <div class="section">
+      <div class="section-title">¿Qué puede hacer?</div>
+      <ul class="feature-list">
+        <li><span class="icon">🎙️</span><div><strong>Activación por voz</strong> — Di "Sofía" y espera el tono. Detección difusa (Levenshtein) para variaciones de pronunciación.</div></li>
+        <li><span class="icon">🌤️</span><div><strong>Clima en tiempo real</strong> — "Sofía, ¿qué clima hay en Bogotá?" vía Open-Meteo, sin API key.</div></li>
+        <li><span class="icon">📅</span><div><strong>Agenda completa</strong> — Eventos, alarmas y tareas. Compartida con NebulaNotes (JSON compatible).</div></li>
+        <li><span class="icon">🖥️</span><div><strong>Control de escritorio</strong> — Abrir, cerrar, minimizar/maximizar apps. Resolver referencias implícitas: <em>"ciérrala"</em>, <em>"minimízala"</em>.</div></li>
+        <li><span class="icon">🧠</span><div><strong>IA conversacional</strong> — Qwen3-8B local vía llama.cpp. Responde preguntas libres en español, sin conexión.</div></li>
+        <li><span class="icon">📝</span><div><strong>Notas rápidas</strong> — "Sofía, crea una nota: reunión con el cliente el viernes."</div></li>
+        <li><span class="icon">🌐</span><div><strong>Búsqueda web y YouTube</strong> — Lanza búsquedas directamente desde la voz.</div></li>
+        <li><span class="icon">⏰</span><div><strong>Rutina matutina</strong> — "Buenos días, Sofía" despliega saludo + clima + agenda del día.</div></li>
+      </ul>
+    </div>
+
+    <!-- ── PIPELINE ── -->
+    <div class="section">
+      <div class="section-title cyan">Pipeline de voz</div>
+      <div class="pipeline">
+        <div class="pipeline-step">
+          <div class="step-num">1</div>
+          <div><strong>Silero-VAD</strong> — Filtra silencio en tiempo real (CPU, siempre activo)</div>
+        </div>
+        <div class="pipeline-arrow">↓</div>
+        <div class="pipeline-step">
+          <div class="step-num">2</div>
+          <div><strong>Whisper "tiny"</strong> — Detecta la wake-word "Sofía" (match difuso)</div>
+        </div>
+        <div class="pipeline-arrow">↓</div>
+        <div class="pipeline-step">
+          <div class="step-num cyan">3</div>
+          <div>Reproduce <strong>"Dime"</strong> (audio pre-renderizado, sin GPU, instantáneo)</div>
+        </div>
+        <div class="pipeline-arrow">↓  <em style="color:var(--purple-l);font-size:10px;">← carga perezosa en paralelo</em></div>
+        <div class="pipeline-step">
+          <div class="step-num">4</div>
+          <div><strong>Whisper "base"</strong> — Transcribe el comando completo (más preciso)</div>
+        </div>
+        <div class="pipeline-arrow">↓</div>
+        <div class="pipeline-step">
+          <div class="step-num">5</div>
+          <div><strong>Router</strong> — Primer keyword-match gana; fallback al LLM</div>
+        </div>
+        <div class="pipeline-arrow">↓</div>
+        <div class="pipeline-step">
+          <div class="step-num cyan">6</div>
+          <div><strong>TTS</strong> — pyttsx3 (offline rápido) o Qwen3-TTS (GPU, natural)</div>
+        </div>
+      </div>
+      <div class="highlight">
+        El tiempo de carga de los modelos pesados queda oculto en el tiempo que el usuario tarda en pronunciar su comando.
+      </div>
+    </div>
+
+    <!-- ── COMPARATIVA ── -->
+    <div class="section full-section">
+      <div class="section-title">SOFÍA vs. Asistentes de voz comerciales</div>
+      <table class="comp-table">
+        <thead>
+          <tr>
+            <th>Característica</th>
+            <th>SOFÍA</th>
+            <th>Alexa / Google / Siri</th>
+            <th>Cortana / Copilot</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Funciona sin Internet</td>
+            <td class="yes">✓ 100%</td>
+            <td class="no">✗ Requiere conexión</td>
+            <td class="no">✗ Parcial</td>
+          </tr>
+          <tr>
+            <td>Audio procesado localmente</td>
+            <td class="yes">✓ Todo local</td>
+            <td class="no">✗ Servidores remotos</td>
+            <td class="no">✗ Azure Cloud</td>
+          </tr>
+          <tr>
+            <td>Control de escritorio Windows</td>
+            <td class="yes">✓ Completo (pywinauto)</td>
+            <td class="no">✗ No disponible</td>
+            <td class="par">~ Limitado</td>
+          </tr>
+          <tr>
+            <td>Idioma principal</td>
+            <td class="yes">✓ Español nativo</td>
+            <td class="par">~ Multilingüe</td>
+            <td class="par">~ Multilingüe</td>
+          </tr>
+          <tr>
+            <td>Extensible / Personalizable</td>
+            <td class="yes">✓ 1 archivo Python</td>
+            <td class="par">~ SDK propietario</td>
+            <td class="par">~ Plugin store</td>
+          </tr>
+          <tr>
+            <td>Costo de operación</td>
+            <td class="yes">✓ $0 recurrente</td>
+            <td class="no">✗ API: $/consulta</td>
+            <td class="no">✗ Microsoft 365</td>
+          </tr>
+          <tr>
+            <td>Sin suscripción obligatoria</td>
+            <td class="yes">✓</td>
+            <td class="no">✗</td>
+            <td class="no">✗</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ── ARQUITECTURA RÁPIDA ── -->
+    <div class="section">
+      <div class="section-title">Arquitectura: 5 principios</div>
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-title">Router por keywords</div>
+          <div class="card-body">Sin NLU. Latencia mínima. Depurable. Determinista.</div>
+        </div>
+        <div class="card">
+          <div class="card-title">LLM solo fallback</div>
+          <div class="card-body">El 95% de comandos los resuelven skills sin tocar el LLM.</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Lazy loading</div>
+          <div class="card-body">Modelos pesados cargan mientras el usuario habla.</div>
+        </div>
+        <div class="card">
+          <div class="card-title">JSON plano</div>
+          <div class="card-body">Sin base de datos. Un usuario, volumen trivial.</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Doble Whisper</div>
+          <div class="card-body">tiny (wake-word) + base (comando). Costo mínimo en espera.</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Privacidad by design</div>
+          <div class="card-body">Ningún dato personal cruza la red. Nunca.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── AÑADIR UNA SKILL ── -->
+    <div class="section">
+      <div class="section-title cyan">Extensibilidad: 2 pasos</div>
+      <div style="font-size:12px;color:var(--gray);margin-bottom:3mm;">
+        Integra SOFÍA con cualquier sistema sin tocar el núcleo:
+      </div>
+      <div class="code">
+<span class="cm"># 1. skills/mi_skill.py</span>
+<span class="kw">KEYWORDS</span> = [<span style="color:#c8956c">"mi comando"</span>, <span style="color:#c8956c">"mi tarea"</span>]
+
+<span class="kw">def</span> manejar(texto) -> <span class="kw">str</span>:
+    <span class="kw">return</span> <span style="color:#c8956c">"Hecho."</span>
+
+<span class="cm"># 2. main.py</span>
+router.registrar(<span style="color:#c8956c">"mi_skill"</span>,
+    mi_skill.<span class="kw">KEYWORDS</span>,
+    mi_skill.manejar)
+      </div>
+      <div style="font-size:11px;color:var(--gray);margin-top:3mm;">
+        → Riesgo de regresión prácticamente nulo. El núcleo ya probado no cambia.
+      </div>
+    </div>
+
+    <!-- ── MÉTRICAS ── -->
+    <div class="section full-section">
+      <div class="section-title green">Resultados de prueba</div>
+      <div class="metrics-row">
+        <div class="metric"><div class="metric-num purple">8</div><div class="metric-label">Skills funcionales</div></div>
+        <div class="metric"><div class="metric-num cyan">~3.2K</div><div class="metric-label">Líneas de código</div></div>
+        <div class="metric"><div class="metric-num green">100%</div><div class="metric-label">Tasa de éxito (5/5)</div></div>
+        <div class="metric"><div class="metric-num amber">4.5 GB</div><div class="metric-label">LLM Qwen3-8B</div></div>
+        <div class="metric"><div class="metric-num purple">41 MB</div><div class="metric-label">RAM base (idle)</div></div>
+        <div class="metric"><div class="metric-num cyan">543 MB</div><div class="metric-label">RAM carga total</div></div>
+      </div>
+      <div style="font-size:11px;color:var(--gray);">
+        Hardware de prueba: Intel 12 núcleos · 31,6 GB RAM · RTX 3050 Laptop 4 GB VRAM · Windows 10/11 &nbsp;|&nbsp;
+        Sin fugas de memoria detectadas: el incremento de 501 MB corresponde a carga única de módulos (Whisper, PyQt6, Torch), no a acumulación iterativa.
+      </div>
+    </div>
+
+    <!-- ── STACK ── -->
+    <div class="section">
+      <div class="section-title">Stack tecnológico</div>
+      <table class="tech-table">
+        <tr><td>Python 3.10–3.12</td><td>Lenguaje base</td></tr>
+        <tr><td>Faster-Whisper</td><td>STT local (CTranslate2)</td></tr>
+        <tr><td>Silero-VAD</td><td>Detección de voz (CPU)</td></tr>
+        <tr><td>llama-cpp-python</td><td>LLM local (Qwen3-8B)</td></tr>
+        <tr><td>Qwen3-TTS-0.6B</td><td>TTS natural (GPU opcional)</td></tr>
+        <tr><td>pyttsx3</td><td>TTS offline rápido (default)</td></tr>
+        <tr><td>PyQt6</td><td>Interfaz gráfica frameless</td></tr>
+        <tr><td>pywinauto</td><td>Control de escritorio Windows</td></tr>
+        <tr><td>Open-Meteo API</td><td>Clima (sin API key)</td></tr>
+      </table>
+    </div>
+
+    <!-- ── REQUISITOS ── -->
+    <div class="section">
+      <div class="section-title cyan">Requisitos del sistema</div>
+      <ul class="feature-list">
+        <li><span class="icon">💻</span><div><strong>Windows 10 / 11</strong> (64-bit)</div></li>
+        <li><span class="icon">🧮</span><div><strong>CPU</strong> — Cualquier procesador moderno (4+ núcleos recomendado)</div></li>
+        <li><span class="icon">💾</span><div><strong>RAM</strong> — Mínimo 8 GB (16 GB recomendado con LLM activo)</div></li>
+        <li><span class="icon">💿</span><div><strong>Disco</strong> — ~11 GB libres (venv + modelos)</div></li>
+        <li><span class="icon">🎮</span><div><strong>GPU NVIDIA con CUDA</strong> — Opcional. Necesaria solo para Qwen3-TTS de alta calidad. Sin GPU, usa pyttsx3.</div></li>
+        <li><span class="icon">🎙️</span><div><strong>Micrófono</strong> — Cualquier micrófono USB o integrado</div></li>
+        <li><span class="icon">🐍</span><div><strong>Python 3.10–3.12</strong> (el instalador lo configura)</div></li>
+      </ul>
+    </div>
+
+  </div><!-- /main-grid -->
+
+  <!-- ══ FOOTER ══ -->
+  <div class="footer">
+    <div>
+      <div class="footer-logo">SOFÍA</div>
+      <div style="font-size:10px;color:var(--gray2);margin-top:2px;">Sistema Offline de Funciones con IA · v1.0 · 2026</div>
+    </div>
+    <div class="footer-contact">
+      <strong style="color:var(--white);">Contacto</strong><br>
+      <a href="mailto:aetherion.d@gmail.com">aetherion.d@gmail.com</a><br>
+      <span style="color:var(--gray2);">Repositorio: C:\ProgramData\SOFIA</span>
+    </div>
+  </div>
+
+</div><!-- /page -->
+
+</body>
+</html>

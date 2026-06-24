@@ -1,5 +1,12 @@
 """
-Skill web: abrir youtube/buscar videos, búsquedas en Google, noticias (RSS).
+Skill web: reproducir videos en YouTube, búsquedas en internet, noticias (RSS).
+
+MEJORAS v2:
+  - reproducir_youtube(): usa yt-dlp para obtener el primer resultado y abrir
+    el video directamente (autoplay), en vez de la página de resultados.
+  - buscar_en_internet(): usa duckduckgo-search (DDGS) para leer los 3 primeros
+    snippets en voz y además abre Google en el navegador.
+  - Ambas funciones tienen fallback al comportamiento anterior si las deps faltan.
 """
 
 import re
@@ -24,25 +31,68 @@ def _extraer_consulta(texto, palabras_quitar):
 
 def reproducir_youtube(texto):
     consulta = _extraer_consulta(
-        texto, ["en youtube", "youtube", "reproduce", "reproducir", "pon musica", "pon música", "pon", "toca"]
+        texto, ["en youtube", "youtube", "reproduce", "reproducir",
+                "pon musica", "pon música", "pon", "toca"]
     )
     if not consulta:
         webbrowser.open("https://www.youtube.com")
         return "Abriendo YouTube."
 
+    # Intentar obtener el primer video directamente con yt-dlp
+    try:
+        import yt_dlp
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "extract_flat": True,
+            "playlist_items": "1",
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{consulta}", download=False)
+        entries = info.get("entries", [])
+        if entries and entries[0].get("id"):
+            video_id = entries[0]["id"]
+            webbrowser.open(f"https://www.youtube.com/watch?v={video_id}&autoplay=1")
+            return f"Reproduciendo {consulta} en YouTube."
+    except Exception:
+        pass
+
+    # Fallback: abrir página de resultados de búsqueda
     url = f"https://www.youtube.com/results?search_query={consulta.replace(' ', '+')}"
     webbrowser.open(url)
     return f"Buscando {consulta} en YouTube."
 
 
-def buscar_google(texto):
-    consulta = _extraer_consulta(texto, ["buscar", "busca", "investiga", "en google", "google"])
+def buscar_en_internet(texto):
+    consulta = _extraer_consulta(
+        texto, ["buscar", "busca", "investiga", "en google", "google", "en internet"]
+    )
     if not consulta:
         return "¿Qué quieres que busque?"
 
-    url = f"https://www.google.com/search?q={consulta.replace(' ', '+')}"
-    webbrowser.open(url)
-    return f"Busqué '{consulta}' y abrí los resultados en el navegador."
+    url_google = f"https://www.google.com/search?q={consulta.replace(' ', '+')}"
+
+    # Intentar leer resultados con DDGS (paquete renombrado de duckduckgo_search a ddgs)
+    try:
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+        with DDGS() as ddgs:
+            resultados = list(ddgs.text(consulta, max_results=3))
+        if resultados:
+            snippets = [r["body"][:120] for r in resultados if r.get("body")]
+            if snippets:
+                resumen = ". ".join(snippets)
+                webbrowser.open(url_google)
+                return f"Esto es lo que encontré sobre {consulta}: {resumen}"
+    except Exception:
+        pass
+
+    # Fallback: solo abrir el navegador
+    webbrowser.open(url_google)
+    return f"Abrí los resultados de '{consulta}' en el navegador."
 
 
 def consultar_noticias(_texto=None):
@@ -66,6 +116,6 @@ def manejar(texto):
         return reproducir_youtube(texto)
 
     if any(p in texto for p in ["buscar", "busca", "investiga", "google"]):
-        return buscar_google(texto)
+        return buscar_en_internet(texto)
 
     return "No entendí la solicitud web."

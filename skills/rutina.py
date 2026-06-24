@@ -88,17 +88,18 @@ def _abrir_whatsapp() -> str:
         webbrowser.open("https://web.whatsapp.com")
         return "Abrí WhatsApp Web en el navegador."
 
-    # Esperar un momento a que WhatsApp cargue y leer contenido
-    time.sleep(2)
+    # Esperar a que WhatsApp cargue antes de leer via UIA
+    time.sleep(4)
     try:
         from skills.control_escritorio import desktop
         resumen = desktop.leer_contenido_ventana()
-        if resumen:
+        print(f"[WHATSAPP] contenido UIA: {repr(resumen)}")  # DEBUG
+        if resumen and resumen.strip():
             return f"Abrí WhatsApp. {resumen}."
     except Exception:
         pass
 
-    return "Abrí WhatsApp."
+    return "Abrí WhatsApp. Revisa si tienes mensajes nuevos, no pude leerlos automáticamente."
 
 
 def _resumen_agenda() -> str:
