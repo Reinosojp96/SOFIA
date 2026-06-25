@@ -50,6 +50,10 @@ def registrar_skills():
     # Fallback: conversación libre con la IA local, enriquecida con contexto de escritorio
     router.registrar_fallback(_fallback_con_contexto)
 
+    conflictos = router.detectar_conflictos()
+    if conflictos:
+        print(f"[ROUTER] {len(conflictos)} conflicto(s) de keywords detectados al arrancar.")
+
 
 def _fallback_con_contexto(texto: str) -> str:
     ctx = contexto.snapshot()

@@ -12,6 +12,7 @@ MEJORAS v2:
 
 import re
 import unicodedata
+import warnings
 from collections import defaultdict
 
 
@@ -36,6 +37,36 @@ class Router:
     def registrar_fallback(self, funcion: callable):
         """Función llamada si ninguna skill hace match (IA conversacional)."""
         self._fallback = funcion
+
+    def detectar_conflictos(self) -> list[str]:
+        """Detecta keywords duplicadas o en relación de subcadena entre skills.
+        Emite warnings.warn por cada conflicto y devuelve la lista de mensajes.
+        """
+        alertas = []
+        for i, (nombre_a, kws_a, _) in enumerate(self._skills):
+            kws_a_norm = [_quitar_tildes(k) for k in kws_a]
+            for j, (nombre_b, kws_b, _) in enumerate(self._skills):
+                if i >= j:
+                    continue
+                kws_b_norm = [_quitar_tildes(k) for k in kws_b]
+                for ka in kws_a_norm:
+                    for kb in kws_b_norm:
+                        if ka == kb:
+                            msg = (f"[ROUTER] Conflicto exacto: \"{ka}\" -- "
+                                   f"'{nombre_a}' registrada antes que '{nombre_b}'")
+                            alertas.append(msg)
+                            warnings.warn(msg)
+                        elif ka in kb:
+                            msg = (f"[ROUTER] Subcadena: \"{ka}\" ({nombre_a}) es subcadena "
+                                   f"de \"{kb}\" ({nombre_b}) -- '{nombre_a}' ganará siempre")
+                            alertas.append(msg)
+                            warnings.warn(msg)
+                        elif kb in ka:
+                            msg = (f"[ROUTER] Subcadena: \"{kb}\" ({nombre_b}) es subcadena "
+                                   f"de \"{ka}\" ({nombre_a}) -- '{nombre_b}' ganará siempre")
+                            alertas.append(msg)
+                            warnings.warn(msg)
+        return alertas
 
     def _normalizar(self, texto: str) -> str:
         texto = texto.lower().strip()

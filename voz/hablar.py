@@ -71,9 +71,11 @@ def _ensure_qwen() -> bool:
 
 def hablar_estatico(clave: str) -> bool:
     """
-    Reproduce el .wav pre-renderizado para 'clave' si existe.
-    Sin GPU, instantáneo. Devuelve True si se reprodujo, False si no existe.
+    Reproduce el .wav pre-renderizado para 'clave' si existe Y el motor activo es qwen.
+    Si el motor es pyttsx3 devuelve False para que el llamador use TTS de texto.
     """
+    if MOTOR != "qwen":
+        return False
     archivo = _AUDIO_DIR / f"{clave}.wav"
     if not archivo.exists():
         return False

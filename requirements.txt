@@ -30,7 +30,8 @@ llama-cpp-python            # requiere compilador C++; ver README para instrucci
 requests>=2.31              # peticiones HTTP (clima, web, etc.)
 python-dotenv>=0.21.0          # carga variables de entorno desde .env (opcional, recomendado para claves API)
 PyQt6
-
+pytest 
+requests
 # ── Control de escritorio ─────────────────────────────────────────────────────
 
 psutil>=5.9                 # detección de procesos activos
