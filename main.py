@@ -201,12 +201,29 @@ def main():
             return
 
         while True:
+            # Si el hilo de captura murió (p.ej. micrófono desconectado o
+            # incompatible), avisamos UNA vez y salimos del bucle en vez de
+            # girar en vacío fingiendo que escuchamos.
+            if not escuchador.esta_vivo():
+                widget.agregar_mensaje(
+                    "SOFÍA",
+                    "Perdí el acceso al micrófono. Revisa que esté conectado "
+                    "y reinicia, o usa el modo texto."
+                )
+                widget.set_estado("Sin micrófono", "#d29922")
+                return
+
             registrar_estado("reposo")
             try:
                 resto = escuchador.esperar_activacion()
             except Exception as e:
                 print(f"[voz] Error en activación continua: {e}")
-                continue
+                widget.agregar_mensaje(
+                    "SOFÍA",
+                    "El micrófono dejó de responder. Puedes seguir por texto."
+                )
+                widget.set_estado("Sin micrófono", "#d29922")
+                return
 
             origen = f"Tú ({PALABRA_ACTIVACION.capitalize()})"
             registrar_estado("escuchando")

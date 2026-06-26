@@ -443,13 +443,24 @@ def paso8_modelos(directorio: Path, hw: dict, prefs: dict):
     espacio = hw.get("espacio_gb", 20)
 
     # ── Whisper ──
-    modelo_whisper = "base" if vram >= 4 else "tiny"
-    info(f"Descargando Whisper '{modelo_whisper}'...")
+    # IMPORTANTE: descargar SIEMPRE dentro de data/modelos/whisper (download_root).
+    # Sin download_root, faster-whisper baja el modelo a la caché global de
+    # HuggingFace (~/.cache/huggingface); luego voz/escuchar.py, que sí usa
+    # download_root, lo vuelve a descargar dentro de data/ -> descarga doble y
+    # residuo fuera de la carpeta del proyecto.
+    # Además, en ejecución se usan DOS modelos: "tiny" (wake-word) y "base"
+    # (comandos). Predescargamos ambos para que el primer arranque no baje nada.
+    whisper_dir = data_dir / "modelos" / "whisper"
+    whisper_dir.mkdir(parents=True, exist_ok=True)
+    modelos_whisper = ["tiny", "base"] if vram >= 4 else ["tiny"]
+    info(f"Descargando Whisper {modelos_whisper} en {whisper_dir}...")
     try:
         from faster_whisper import WhisperModel
-        with Spinner(f"Whisper '{modelo_whisper}'..."):
-            WhisperModel(modelo_whisper, device="cpu", compute_type="int8")
-        ok(f"Whisper '{modelo_whisper}' listo.")
+        for mw in modelos_whisper:
+            with Spinner(f"Whisper '{mw}'..."):
+                WhisperModel(mw, device="cpu", compute_type="int8",
+                             download_root=str(whisper_dir))
+            ok(f"Whisper '{mw}' listo.")
     except Exception as e:
         warn(f"No se pudo predescargar Whisper: {e}")
 

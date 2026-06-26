@@ -2,24 +2,37 @@
 Pipeline de detección de voz offline y de baja latencia.
 
 Flujo:
-  Audio (chunks de 512 muestras)
+  Audio del micrófono (a la tasa NATIVA del dispositivo)
+    -> remuestreo a 16 kHz en streaming (Silero-VAD/Whisper lo exigen)
     -> Silero-VAD  (filtra silencio; CPU 1-5%)
-    -> acumula hasta ~2 s de voz continua
-    -> Faster-Whisper "base" (transcribe; CPU 15-30%)
+    -> acumula la frase
+    -> normalización de volumen (clave para micrófono lejano)
+    -> Faster-Whisper (transcribe)
     -> busca "sofia" (o variantes fonéticas) en el texto
     -> devuelve el resto del comando
 
-MEJORAS v3:
-  - Selección explícita de dispositivo de entrada (micrófono externo):
-    SOFIA_MIC_NAME en .env para elegir por nombre (substring, case-insensitive).
-    Si no se define o no se encuentra, usa el default e imprime la lista
-    de dispositivos disponibles para que puedas copiar el nombre exacto.
-  - Modelo Whisper "base" en vez de "tiny": tiny confundía "sofia" con
-    "novia", "vía", "ovia" de forma consistente (ver log v2).
-  - Variantes literales agregadas para los errores reales observados:
-    novia, ovia, via, vía, fia, ovía.
-  - Umbral difuso subido de 0.35 a 0.40 como red de seguridad adicional.
-  - Resto igual que v2 (cola con maxsize, cerrar() robusto, etc.)
+MEJORAS v4 (corrección de los fallos de la sustentación):
+  - **El hilo de captura ya NO muere en silencio.** Antes, si un micrófono
+    USB no soportaba exactamente 16 kHz / bloques de 512 muestras,
+    `sd.InputStream` lanzaba PortAudioError, el hilo daemon moría sin que
+    nadie se enterara y la app se "congelaba" (la UI seguía viva pero la
+    cola de audio nunca volvía a llenarse). Ahora:
+      * Se negocia una tasa de muestreo SOPORTADA por el dispositivo
+        (su tasa nativa, luego 48k/44.1k/32k/16k) y se remuestrea a 16 kHz.
+      * `sd.InputStream` va dentro de try/except con reintentos.
+      * Si todo falla se marca un flag de error y `esta_vivo()` lo expone,
+        en vez de bloquear para siempre.
+  - **Transcripción a distancia (>30 cm).** La señal lejana llega muy
+    baja; Whisper en int8 sobre audio bajo devolvía basura o nada. Ahora:
+      * Ganancia opcional por chunk (SOFIA_MIC_GAIN).
+      * Normalización de pico de la frase completa antes de transcribir
+        (sube el volumen sin amplificar el silencio puro).
+      * Umbral de VAD por defecto más bajo (0.35) para que la voz suave
+        lejana sí dispare la captura.
+      * Se reinicia el estado interno del VAD entre frases (Silero es
+        recurrente; sin reset las probabilidades se "arrastran").
+  - Carga de Whisper de comandos protegida con lock (evita doble carga
+    simultánea desde dos hilos -> OOM en GPU de 4 GB).
 """
 
 from __future__ import annotations
@@ -27,6 +40,7 @@ from __future__ import annotations
 import os
 import queue
 import threading
+import time
 from pathlib import Path
 import numpy as np
 
@@ -45,22 +59,14 @@ PALABRA_ACTIVACION: str = os.environ.get("SOFIA_WAKE_WORD", "sofia").lower()
 
 # Nombre (o parte del nombre) del micrófono que quieres usar.
 # Ejemplo en .env:  SOFIA_MIC_NAME=USB
-# Si no se define, se usa el dispositivo de entrada por defecto del sistema.
 MIC_NAME: str = os.environ.get("SOFIA_MIC_NAME", "").strip().lower()
 
-# Modelo de Whisper. "tiny" es más rápido pero confunde palabras cortas
-# como "sofia" muy fácilmente. "base" es notablemente más preciso y sigue
-# siendo viable en CPU para uso en tiempo real.
+# Modelo de Whisper para transcribir el comando real (más preciso).
 WHISPER_MODEL_SIZE: str = os.environ.get("SOFIA_WHISPER_MODEL", "base")
-
-# Modelo ligero SOLO para detección de la wake-word (siempre cargado).
-# "tiny" ocupa ~0.2 GB y es suficiente para distinguir "sofia" en 2.5 s.
+# Modelo ligero SOLO para la wake-word (siempre cargado).
 WHISPER_WW_SIZE: str = os.environ.get("SOFIA_WHISPER_WW_MODEL", "tiny")
 
 # Variantes fonéticas que el STT puede devolver al oír "sofia".
-# Incluye los errores REALES observados en los logs v2 (con modelo tiny):
-# novia, ovia, via, vía, fia, ovía, etc. Con "base" deberían ocurrir mucho
-# menos, pero las dejamos como red de seguridad.
 VARIANTES: dict[str, list[str]] = {
     "sofia": [
         "sofia", "sofía", "sophie", "sofie", "sofi", "sofiá", "sophia",
@@ -76,17 +82,24 @@ VARIANTES: dict[str, list[str]] = {
 
 # Audio
 SAMPLE_RATE       = 16_000   # Hz requerido por Silero-VAD y Whisper
-CHUNK_SAMPLES     = 512      # ~32 ms por chunk a 16 kHz (Silero-VAD exige exactamente 512)
-VAD_THRESHOLD     = float(os.environ.get("SOFIA_VAD_THRESHOLD", "0.45"))
-SILENCE_CHUNKS    = 20       # chunks de silencio para fin de frase (~640 ms)
+CHUNK_SAMPLES     = 512      # Silero-VAD exige exactamente 512 muestras a 16 kHz
+VAD_THRESHOLD     = float(os.environ.get("SOFIA_VAD_THRESHOLD", "0.35"))
+SILENCE_CHUNKS    = int(os.environ.get("SOFIA_SILENCE_CHUNKS", "25"))  # ~800 ms
 MAX_VOICE_SECONDS = 8
-# Cola con tamaño máximo: descarta audio viejo si nadie lo consume
-_AUDIO_QUEUE_MAXSIZE = 200
+_AUDIO_QUEUE_MAXSIZE = 400
 
-# Umbral de similitud difusa (0-1). Subido de 0.35 a 0.40: con palabras de
-# 5 letras como "sofia", 0.35 exigía una coincidencia casi perfecta
-# (distancia <= 1.75 -> en la práctica <=1 carácter), lo cual descartaba
-# "novia" (distancia 2 -> 0.40). 0.40 permite distancia 2 en palabras de 5.
+# Ganancia aplicada a cada chunk capturado. 1.0 = sin cambio. Para
+# micrófono lejano o de bajo nivel sube a 2.0-4.0 en el .env.
+MIC_GAIN = float(os.environ.get("SOFIA_MIC_GAIN", "1.0"))
+
+# Pico objetivo al normalizar la frase antes de transcribir. La
+# normalización solo AMPLIFICA (nunca atenúa) y respeta un piso de ruido
+# para no subir el volumen de silencio puro.
+_PICO_OBJETIVO = 0.95
+_GANANCIA_MAX  = 25.0     # tope para no reventar ruido de fondo
+_PISO_RUIDO    = 0.005    # si el pico de la frase es menor, no amplificamos
+
+# Umbral de similitud difusa (0-1).
 _FUZZY_THRESHOLD = float(os.environ.get("SOFIA_FUZZY_THRESHOLD", "0.40"))
 
 
@@ -96,46 +109,82 @@ _FUZZY_THRESHOLD = float(os.environ.get("SOFIA_FUZZY_THRESHOLD", "0.40"))
 
 def _seleccionar_dispositivo():
     """
-    Devuelve el índice del dispositivo de entrada a usar, o None para
-    dejar que sounddevice use el default del sistema.
-
-    - Si SOFIA_MIC_NAME está definido, busca el primer dispositivo de
-      ENTRADA cuyo nombre contenga ese texto (sin importar mayúsculas).
-    - Siempre imprime la lista de dispositivos de entrada disponibles
-      y cuál quedó seleccionado, para poder diagnosticar.
+    Devuelve (indice, info_dispositivo) del micrófono a usar, o (None, None)
+    para dejar que sounddevice use el default del sistema.
     """
     import sounddevice as sd
 
     dispositivos = sd.query_devices()
-    entradas = [(i, d) for i, d in enumerate(dispositivos) if d.get("max_input_channels", 0) > 0]
+    entradas = [(i, d) for i, d in enumerate(dispositivos)
+                if d.get("max_input_channels", 0) > 0]
 
     print("[voz] Dispositivos de entrada disponibles:")
     for i, d in entradas:
-        print(f"       [{i}] {d['name']}  (canales: {d['max_input_channels']})")
+        print(f"       [{i}] {d['name']}  (canales: {d['max_input_channels']}, "
+              f"sr nativa: {int(d.get('default_samplerate', 0))})")
 
     if MIC_NAME:
         for i, d in entradas:
             if MIC_NAME in d["name"].lower():
-                print(f"[voz] Usando micrófono seleccionado por SOFIA_MIC_NAME='{MIC_NAME}': [{i}] {d['name']}")
-                return i
-        print(f"[voz] AVISO: no se encontró ningún micrófono que contenga "
+                print(f"[voz] Micrófono por SOFIA_MIC_NAME='{MIC_NAME}': [{i}] {d['name']}")
+                return i, d
+        print(f"[voz] AVISO: no se encontró un micrófono que contenga "
               f"'{MIC_NAME}'. Usando el dispositivo por defecto.")
 
     try:
         default_in = sd.default.device[0]
-        nombre_default = dispositivos[default_in]["name"] if default_in is not None else "?"
-        print(f"[voz] Usando micrófono por defecto del sistema: [{default_in}] {nombre_default}")
+        if default_in is not None and default_in >= 0:
+            d = dispositivos[default_in]
+            print(f"[voz] Micrófono por defecto: [{default_in}] {d['name']}")
+            return default_in, d
     except Exception:
-        print("[voz] Usando micrófono por defecto del sistema (no se pudo determinar el nombre).")
+        pass
+    print("[voz] Usando micrófono por defecto del sistema (sin nombre).")
+    return None, None
 
-    return None  # deja que sounddevice use el default
+
+def _elegir_samplerate(device_idx, device_info) -> int:
+    """
+    Encuentra una tasa de muestreo que el dispositivo SÍ soporte.
+
+    Forzar 16 kHz en un micrófono USB que solo hace 44.1/48 kHz hacía que
+    `sd.InputStream` fallara y el hilo de captura muriera (la causa raíz
+    del 'se congela al instalar micrófonos externos'). Probamos la nativa
+    primero y luego las habituales.
+    """
+    import sounddevice as sd
+
+    candidatas = []
+    if device_info:
+        nativa = int(device_info.get("default_samplerate", 0) or 0)
+        if nativa:
+            candidatas.append(nativa)
+    candidatas += [48000, 44100, 32000, 16000]
+
+    vistas = []
+    for sr in candidatas:
+        if sr in vistas:
+            continue
+        vistas.append(sr)
+        try:
+            sd.check_input_settings(
+                device=device_idx, channels=1, samplerate=sr, dtype="float32"
+            )
+            print(f"[voz] Tasa de captura negociada: {sr} Hz "
+                  f"(se remuestrea a {SAMPLE_RATE} Hz)")
+            return sr
+        except Exception:
+            continue
+
+    # Si nada validó, dejamos que PortAudio intente con la nativa/16k y que
+    # el try/except del hilo lo reporte en vez de morir en silencio.
+    print("[voz] AVISO: no se pudo validar ninguna tasa; intentaré la nativa.")
+    if device_info and device_info.get("default_samplerate"):
+        return int(device_info["default_samplerate"])
+    return SAMPLE_RATE
 
 
-# Vocabulario que se le "sugiere" a Whisper antes de transcribir, para
-# sesgar el reconocimiento hacia comandos y nombres de apps comunes.
-# Mejora mucho casos como "abre Excel" -> "abre xc"/"aurexel".
-# Personalízalo con los nombres reales de tus apps frecuentes (variable
-# de entorno SOFIA_VOCAB, separado por comas, se agrega al final).
+# Vocabulario que se le "sugiere" a Whisper para sesgar el reconocimiento.
 INITIAL_PROMPT = (
     "Sofía, abre Word, abre Excel, abre PowerPoint, abre Chrome, "
     "abre Brave, abre el navegador, abre WhatsApp, abre Spotify, "
@@ -159,14 +208,14 @@ def _cargar_vad():
     import torch
     _DIR_TORCH_HUB.mkdir(parents=True, exist_ok=True)
     torch.hub.set_dir(str(_DIR_TORCH_HUB))
-    vad_model, utils = torch.hub.load(
+    vad_model, _utils = torch.hub.load(
         repo_or_dir="snakers4/silero-vad",
         model="silero_vad",
         force_reload=False,
         onnx=False,
         trust_repo=True,
     )
-    return vad_model, utils[0]
+    return vad_model
 
 
 def _cargar_whisper_model(size: str):
@@ -190,11 +239,57 @@ def _gpu_disponible() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Remuestreo en streaming (tasa nativa del micrófono -> 16 kHz)
+# ---------------------------------------------------------------------------
+
+class _ResampladorStreaming:
+    """
+    Remuestrea bloques consecutivos de 'sr_origen' a 16 kHz manteniendo la
+    fase entre bloques (evita clics) y entregando frames EXACTOS de 512
+    muestras, que es lo que Silero-VAD necesita.
+    """
+
+    def __init__(self, sr_origen: int):
+        self.sr_origen = sr_origen
+        self.ratio = SAMPLE_RATE / float(sr_origen)
+        self._cola_16k = np.zeros(0, dtype=np.float32)
+        self._ultimo = 0.0  # última muestra del bloque previo (continuidad)
+
+    def procesar(self, bloque: np.ndarray) -> list[np.ndarray]:
+        """Devuelve una lista de frames de 512 muestras a 16 kHz."""
+        if bloque.size == 0:
+            return []
+
+        if self.sr_origen == SAMPLE_RATE:
+            remuestreado = bloque.astype(np.float32)
+        else:
+            # Interpolación lineal con continuidad: prependemos la última
+            # muestra del bloque anterior para que la rampa no salte.
+            origen = np.concatenate(([self._ultimo], bloque)).astype(np.float32)
+            self._ultimo = bloque[-1]
+            n_salida = int(round((len(origen) - 1) * self.ratio))
+            if n_salida <= 0:
+                return []
+            x_origen = np.arange(len(origen), dtype=np.float64)
+            x_destino = np.linspace(0, len(origen) - 1, n_salida, dtype=np.float64)
+            remuestreado = np.interp(x_destino, x_origen, origen).astype(np.float32)
+
+        self._cola_16k = np.concatenate((self._cola_16k, remuestreado))
+
+        frames = []
+        n = len(self._cola_16k)
+        usable = (n // CHUNK_SAMPLES) * CHUNK_SAMPLES
+        for ini in range(0, usable, CHUNK_SAMPLES):
+            frames.append(self._cola_16k[ini:ini + CHUNK_SAMPLES].copy())
+        self._cola_16k = self._cola_16k[usable:]
+        return frames
+
+
+# ---------------------------------------------------------------------------
 # Utilidad: similitud difusa (Levenshtein normalizado)
 # ---------------------------------------------------------------------------
 
 def _distancia_levenshtein(a: str, b: str) -> int:
-    """Calcula la distancia de edición entre dos cadenas."""
     if len(a) < len(b):
         return _distancia_levenshtein(b, a)
     if not b:
@@ -220,29 +315,39 @@ def _similitud(a: str, b: str) -> float:
 
 
 def _contiene_variante(texto: str, variantes: list[str]) -> tuple[bool, str]:
-    """
-    Busca una variante exacta o difusa en el texto.
-    Retorna (encontrado, variante_hallada).
-    """
     palabras = texto.split()
-
-    # 1) Búsqueda exacta (más rápida)
-    for var in variantes:
+    for var in variantes:                       # 1) exacta
         if var in texto:
             return True, var
-
-    # 2) Búsqueda difusa palabra por palabra
-    for palabra in palabras:
+    for palabra in palabras:                    # 2) difusa palabra a palabra
         for var in variantes:
             if _similitud(palabra, var) <= _FUZZY_THRESHOLD:
                 return True, var
-
-    # 3) Búsqueda difusa sobre el texto completo (cubre "sofía" partido en tokens)
-    for var in variantes:
+    for var in variantes:                       # 3) difusa al inicio del texto
         if _similitud(texto[:len(var) + 3], var) <= _FUZZY_THRESHOLD:
             return True, var
-
     return False, ""
+
+
+# ---------------------------------------------------------------------------
+# Normalización de volumen (clave para micrófono lejano)
+# ---------------------------------------------------------------------------
+
+def _normalizar_volumen(audio: np.ndarray) -> np.ndarray:
+    """
+    Sube el volumen de la frase para que Whisper la entienda a distancia.
+    Solo amplifica (con tope) y respeta un piso de ruido: si la frase es
+    casi silencio, no la toca (evitar amplificar ruido de fondo).
+    """
+    if audio.size == 0:
+        return audio
+    pico = float(np.max(np.abs(audio)))
+    if pico < _PISO_RUIDO:
+        return audio
+    ganancia = min(_PICO_OBJETIVO / pico, _GANANCIA_MAX)
+    if ganancia <= 1.0:
+        return audio
+    return np.clip(audio * ganancia, -1.0, 1.0).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -252,49 +357,67 @@ def _contiene_variante(texto: str, variantes: list[str]) -> tuple[bool, str]:
 class Escuchador:
     """
     Escucha el micrófono de forma continua en un hilo interno.
-    API pública: esperar_activacion() / escuchar_frase() / cerrar()
+    API pública: esperar_activacion() / escuchar_frase() / pausar() /
+                 reanudar() / cargar_whisper_cmd() / esta_vivo() / cerrar()
     """
 
     def __init__(self):
         print("[voz] Cargando modelos (primera vez puede tardar unos segundos)...")
-        self._vad, self._get_prob = _cargar_vad()
+        self._vad = _cargar_vad()
         # Whisper tiny: siempre cargado, solo para detectar la wake-word
         self._whisper_ww, self._device = _cargar_whisper_model(WHISPER_WW_SIZE)
-        # Whisper base: se carga bajo demanda para transcribir comandos reales
         self._whisper_cmd = None
-        print(f"[voz] Modelos listos — dispositivo: {self._device} — whisper: {WHISPER_MODEL_SIZE}")
+        self._cmd_lock = threading.Lock()   # evita doble carga simultánea
+        print(f"[voz] Modelos listos — dispositivo: {self._device} — "
+              f"whisper cmd: {WHISPER_MODEL_SIZE}")
 
-        self._device_idx = _seleccionar_dispositivo()
+        self._device_idx, self._device_info = _seleccionar_dispositivo()
+        self._sr_captura = _elegir_samplerate(self._device_idx, self._device_info)
 
-        # maxsize evita acumular audio viejo en cola
         self._audio_q: queue.Queue[np.ndarray] = queue.Queue(maxsize=_AUDIO_QUEUE_MAXSIZE)
-        self._parar   = threading.Event()
-        # Mientras SOFIA habla, _pausado está activo: el callback de audio
-        # sigue corriendo (sounddevice lo requiere) pero descarta los
-        # chunks en vez de meterlos a la cola. Evita el bucle de
-        # retroalimentación donde el micrófono capta el TTS de SOFIA
-        # y ella "se responde a sí misma".
-        self._pausado = threading.Event()
-        self._hilo    = threading.Thread(target=self._capturar_audio, daemon=True)
+        self._parar    = threading.Event()
+        self._pausado  = threading.Event()
+        self._error    = threading.Event()   # se activa si la captura falla
+        self._mensaje_error = ""
+
+        self._hilo = threading.Thread(target=self._capturar_audio, daemon=True)
         self._hilo.start()
+
+        # Espera breve a que el stream confirme que arrancó, para poder
+        # reportar el fallo de micrófono al instante (en vez de "congelarse").
+        time.sleep(0.4)
+        if self._error.is_set():
+            raise RuntimeError(self._mensaje_error or "No se pudo abrir el micrófono")
+
+    # ------------------------------------------------------------------
+    # Salud
+    # ------------------------------------------------------------------
+
+    def esta_vivo(self) -> bool:
+        """True si el hilo de captura sigue corriendo sin error."""
+        return self._hilo.is_alive() and not self._error.is_set()
 
     # ------------------------------------------------------------------
     # Carga / descarga de Whisper para comandos (bajo demanda)
     # ------------------------------------------------------------------
 
     def cargar_whisper_cmd(self):
-        """Carga Whisper base para transcribir comandos. Idempotente."""
+        """Carga Whisper base para transcribir comandos. Idempotente y thread-safe."""
         if self._whisper_cmd is not None:
             return
-        print(f"[voz] Cargando Whisper {WHISPER_MODEL_SIZE} (comandos)...")
-        self._whisper_cmd, _ = _cargar_whisper_model(WHISPER_MODEL_SIZE)
-        print(f"[voz] Whisper {WHISPER_MODEL_SIZE} listo")
+        with self._cmd_lock:
+            if self._whisper_cmd is not None:
+                return
+            print(f"[voz] Cargando Whisper {WHISPER_MODEL_SIZE} (comandos)...")
+            self._whisper_cmd, _ = _cargar_whisper_model(WHISPER_MODEL_SIZE)
+            print(f"[voz] Whisper {WHISPER_MODEL_SIZE} listo")
 
     def descargar_whisper_cmd(self):
         """Libera Whisper base de la VRAM."""
-        if self._whisper_cmd is None:
-            return
-        self._whisper_cmd = None
+        with self._cmd_lock:
+            if self._whisper_cmd is None:
+                return
+            self._whisper_cmd = None
         try:
             import torch
             torch.cuda.empty_cache()
@@ -311,61 +434,91 @@ class Escuchador:
         self._pausado.set()
 
     def reanudar(self, retardo=0.35):
-        """
-        Reanuda la captura. 'retardo' (segundos) da tiempo a que el eco
-        del TTS por los parlantes se disipe antes de volver a escuchar.
-        Vacía la cola para no procesar audio viejo/acumulado.
-        """
-        import time
+        """Reanuda la captura tras 'retardo' s (deja disipar el eco del TTS)."""
         if retardo > 0:
             time.sleep(retardo)
+        self._vaciar_cola()
+        self._pausado.clear()
+
+    def _vaciar_cola(self):
         while True:
             try:
                 self._audio_q.get_nowait()
             except queue.Empty:
                 break
-        self._pausado.clear()
 
     # ------------------------------------------------------------------
-    # Hilo de captura
+    # Hilo de captura (robusto: no muere en silencio)
     # ------------------------------------------------------------------
 
     def _capturar_audio(self):
         import sounddevice as sd
+
+        resampler = _ResampladorStreaming(self._sr_captura)
+        # bloque ~32 ms a la tasa de captura; 0 dejaría que PortAudio elija,
+        # pero un bloque fijo nos da frames de 16 kHz más regulares.
+        blocksize = max(64, int(round(self._sr_captura * 0.032)))
 
         def callback(indata, frames, time_info, status):
             if status:
                 print(f"[voz] sounddevice status: {status}")
             if self._pausado.is_set():
                 return
-            chunk = indata[:, 0].copy().astype(np.float32)
-            try:
-                self._audio_q.put_nowait(chunk)
-            except queue.Full:
-                # descartamos el chunk más viejo y metemos el nuevo
+            bloque = indata[:, 0].astype(np.float32)
+            if MIC_GAIN != 1.0:
+                bloque = bloque * MIC_GAIN
+            for frame in resampler.procesar(bloque):
                 try:
-                    self._audio_q.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    self._audio_q.put_nowait(chunk)
+                    self._audio_q.put_nowait(frame)
                 except queue.Full:
-                    pass
+                    try:
+                        self._audio_q.get_nowait()
+                        self._audio_q.put_nowait(frame)
+                    except (queue.Empty, queue.Full):
+                        pass
 
-        with sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype="float32",
-            blocksize=CHUNK_SAMPLES,
-            device=self._device_idx,
-            latency='high',  # buffer interno más grande para dispositivos USB
-            callback=callback,
-        ):
-            self._parar.wait()
+        # Reintenta abrir el stream; si falla, marca error y NO bloquea la app.
+        intentos = 0
+        ultimo_err = None
+        while not self._parar.is_set() and intentos < 3:
+            intentos += 1
+            try:
+                with sd.InputStream(
+                    samplerate=self._sr_captura,
+                    channels=1,
+                    dtype="float32",
+                    blocksize=blocksize,
+                    device=self._device_idx,
+                    latency="high",   # buffer más grande, mejor para USB
+                    callback=callback,
+                ):
+                    print(f"[voz] Captura activa a {self._sr_captura} Hz.")
+                    self._error.clear()
+                    self._parar.wait()
+                return  # cierre limpio
+            except Exception as e:
+                ultimo_err = e
+                print(f"[voz] ERROR abriendo el micrófono (intento {intentos}/3): {e}")
+                time.sleep(0.6)
+
+        self._mensaje_error = (
+            f"No se pudo abrir el micrófono [{self._device_idx}] a "
+            f"{self._sr_captura} Hz: {ultimo_err}"
+        )
+        self._error.set()
+        print(f"[voz] {self._mensaje_error}")
+        print("[voz] Revisa SOFIA_MIC_NAME en .env o elige otro micrófono en Windows.")
 
     # ------------------------------------------------------------------
     # VAD
     # ------------------------------------------------------------------
+
+    def _reset_vad(self):
+        """Reinicia el estado recurrente de Silero antes de cada frase."""
+        try:
+            self._vad.reset_states()
+        except Exception:
+            pass
 
     def _es_voz(self, chunk: np.ndarray) -> bool:
         import torch
@@ -378,15 +531,16 @@ class Escuchador:
     # Transcripción
     # ------------------------------------------------------------------
 
-    def _transcribir(self, audio: np.ndarray, modelo=None) -> str:
-        # Si no se pasa modelo, usa whisper_cmd si está cargado, si no el ww
+    def _transcribir(self, audio: np.ndarray, modelo=None, usar_prompt=True) -> str:
         m = modelo or self._whisper_cmd or self._whisper_ww
+        audio = _normalizar_volumen(audio)
         segments, _ = m.transcribe(
             audio,
             language="es",
             beam_size=1,
             vad_filter=False,
             word_timestamps=False,
+            initial_prompt=INITIAL_PROMPT if usar_prompt else None,
         )
         texto = " ".join(seg.text for seg in segments).lower().strip()
         if texto:
@@ -399,16 +553,28 @@ class Escuchador:
 
     def escuchar_frase(self, tiempo_espera=6, limite_frase=10) -> str | None:
         """
-        Espera hasta 'tiempo_espera' segundos a que empiece la voz,
-        luego acumula hasta 'limite_frase' segundos y transcribe.
-        Carga Whisper base si aún no está disponible.
+        Espera hasta 'tiempo_espera' s a que empiece la voz, acumula hasta
+        'limite_frase' s y transcribe con Whisper de comandos.
         """
         self.cargar_whisper_cmd()
-        max_espera_chunks  = int(tiempo_espera * SAMPLE_RATE / CHUNK_SAMPLES) if tiempo_espera else 99_999
-        max_comando_chunks = int(limite_frase  * SAMPLE_RATE / CHUNK_SAMPLES)
+        voz_buf = self._capturar_frase(tiempo_espera, limite_frase)
+        if voz_buf is None:
+            return None
+        texto = self._transcribir(np.concatenate(voz_buf))
+        return texto or None
 
+    def _capturar_frase(self, tiempo_espera, limite_frase) -> list[np.ndarray] | None:
+        """Captura una frase (espera inicio de voz + acumula hasta silencio)."""
+        max_espera_chunks  = (int(tiempo_espera * SAMPLE_RATE / CHUNK_SAMPLES)
+                              if tiempo_espera else 99_999)
+        max_comando_chunks = int(limite_frase * SAMPLE_RATE / CHUNK_SAMPLES)
+
+        self._reset_vad()
+        voz_buf = None
         chunks_espera = 0
         while chunks_espera < max_espera_chunks:
+            if not self.esta_vivo():
+                return None
             try:
                 chunk = self._audio_q.get(timeout=0.1)
             except queue.Empty:
@@ -417,11 +583,13 @@ class Escuchador:
                 voz_buf = [chunk]
                 break
             chunks_espera += 1
-        else:
+        if voz_buf is None:
             return None
 
         silencio_cnt = 0
         while len(voz_buf) < max_comando_chunks:
+            if not self.esta_vivo():
+                break
             try:
                 chunk = self._audio_q.get(timeout=0.1)
             except queue.Empty:
@@ -433,46 +601,52 @@ class Escuchador:
                 silencio_cnt += 1
                 if silencio_cnt >= SILENCE_CHUNKS:
                     break
-
-        audio = np.concatenate(voz_buf)
-        texto = self._transcribir(audio)
-        return texto if texto else None
+        return voz_buf
 
     def esperar_activacion(self) -> str:
         """
-        Bucle bloqueante hasta detectar la palabra de activación (exacta o difusa).
+        Bucle bloqueante hasta detectar la palabra de activación.
         Devuelve el resto del comando o "" si solo se dijo el nombre.
+        Lanza RuntimeError si el micrófono dejó de funcionar (en vez de
+        congelarse para siempre).
         """
         variantes = VARIANTES.get(PALABRA_ACTIVACION, [PALABRA_ACTIVACION])
         max_ww_chunks = int(2.5 * SAMPLE_RATE / CHUNK_SAMPLES)
 
         while True:
+            if not self.esta_vivo():
+                raise RuntimeError(self._mensaje_error or "Micrófono no disponible")
             texto = self._escuchar_segmento_corto(max_ww_chunks)
             if not texto:
                 continue
 
-            encontrado, variante_hallada = _contiene_variante(texto, variantes)
-            if encontrado:
-                resto = texto
-                for var in variantes:
-                    if var in texto:
-                        resto = texto.split(var, 1)[-1].strip().lstrip(",.;: ")
-                        break
-                if resto == texto:
-                    partes = texto.split(maxsplit=1)
-                    resto = partes[1] if len(partes) > 1 else ""
-                return resto
+            encontrado, _ = _contiene_variante(texto, variantes)
+            if not encontrado:
+                continue
+
+            resto = texto
+            for var in variantes:
+                if var in texto:
+                    resto = texto.split(var, 1)[-1].strip().lstrip(",.;: ")
+                    break
+            if resto == texto:
+                partes = texto.split(maxsplit=1)
+                resto = partes[1] if len(partes) > 1 else ""
+            return resto
 
     def _escuchar_segmento_corto(self, max_chunks: int) -> str | None:
-        """Versión interna para detección de wake-word: segmento corto."""
-        while True:
+        """Segmento corto para detección de wake-word (modelo tiny)."""
+        self._reset_vad()
+        voz_buf = None
+        while voz_buf is None:
+            if not self.esta_vivo():
+                return None
             try:
                 chunk = self._audio_q.get(timeout=0.15)
             except queue.Empty:
                 continue
             if self._es_voz(chunk):
                 voz_buf = [chunk]
-                break
 
         silencio_cnt = 0
         while len(voz_buf) < max_chunks:
@@ -489,8 +663,8 @@ class Escuchador:
                     break
 
         audio = np.concatenate(voz_buf)
-        # Wake-word usa siempre el modelo tiny (rápido, ya cargado)
-        return self._transcribir(audio, modelo=self._whisper_ww) or None
+        # Wake-word: modelo tiny, sin initial_prompt (no sesgar el nombre).
+        return self._transcribir(audio, modelo=self._whisper_ww, usar_prompt=False) or None
 
     def cerrar(self):
         """Detiene el hilo de captura de forma segura."""

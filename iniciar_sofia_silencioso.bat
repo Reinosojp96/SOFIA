@@ -1,4 +1,4 @@
 @echo off
 cd /d "C:\Users\aethe\Documentos\SOFIA"
 call venv\Scripts\activate
-start /B python main.py
+start /B pythonw main.pyw

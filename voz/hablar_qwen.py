@@ -23,6 +23,15 @@ logging.getLogger("librosa").setLevel(logging.ERROR)
 logging.getLogger("sox").setLevel(logging.ERROR)
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
+# Si por alguna razón hay que descargar desde HuggingFace (no se encontró la
+# carpeta local data/qwen3_tts), forzamos que la caché caiga DENTRO de data/
+# en vez de ~/.cache/huggingface, para que todo el peso del programa quede
+# contenido en data/ (requisito de desinstalación limpia).
+_DATA_HF_CACHE = Path(__file__).parent.parent / "data" / "modelos" / "hf"
+_DATA_HF_CACHE.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("HF_HOME", str(_DATA_HF_CACHE))
+os.environ.setdefault("HF_HUB_CACHE", str(_DATA_HF_CACHE / "hub"))
+
 # ── Configuración desde .env ──────────────────
 CUDA_DEVICE = os.environ.get("SOFIA_CUDA_DEVICE", "cuda:0")
 MODO        = os.environ.get("SOFIA_TTS_VOZ_MODO", "preset")  # "preset" | "clon"
