@@ -300,8 +300,7 @@ def paso5_preferencias(hw: dict) -> dict:
         idx = 1
     p["tts"] = "qwen" if idx == 2 else "pyttsx3"
 
-    mic = input("\n  Nombre de tu micrófono externo (vacío = micrófono por defecto): ").strip()
-    p["mic"] = mic
+    p["mic"] = ""  # se configura en fase2 cuando sounddevice ya está instalado
     wake = input("  Palabra de activación [sofia]: ").strip().lower()
     p["wake"] = wake or "sofia"
     return p
@@ -601,6 +600,8 @@ def paso11_acceso_directo(directorio: Path):
     if not IS_WIN:
         info("Solo disponible en Windows por ahora.")
         return
+
+    # --- Lanzador CON consola (presentación / debug) ---
     bat = directorio / "iniciar_sofia.bat"
     with open(bat, "w", encoding="utf-8") as f:
         f.write(f'@echo off\n')
@@ -609,8 +610,18 @@ def paso11_acceso_directo(directorio: Path):
         # python.exe (con consola) en lugar de pythonw.exe para que
         # sounddevice y pyttsx3 funcionen correctamente
         f.write(f'start /B python main.py\n')
-    ok(f"Script de inicio: {bat}")
-    info("Haz doble clic en 'iniciar_sofia.bat' para iniciar SOFÍA.")
+    ok(f"Script con consola: {bat}")
+
+    # --- Lanzador SIN consola (inicio automático / producción) ---
+    bat_silent = directorio / "iniciar_sofia_silencioso.bat"
+    with open(bat_silent, "w", encoding="utf-8") as f:
+        f.write(f'@echo off\n')
+        f.write(f'cd /d "{directorio}"\n')
+        f.write(f'call venv\\Scripts\\activate\n')
+        f.write(f'start /B pythonw main.pyw\n')
+    ok(f"Script sin consola: {bat_silent}")
+
+    info("Presentación → 'iniciar_sofia.bat'  |  Inicio automático → 'iniciar_sofia_silencioso.bat'")
 
 
 def paso12_test(directorio: Path, prefs: dict):

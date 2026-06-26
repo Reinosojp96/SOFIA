@@ -76,7 +76,7 @@ VARIANTES: dict[str, list[str]] = {
 
 # Audio
 SAMPLE_RATE       = 16_000   # Hz requerido por Silero-VAD y Whisper
-CHUNK_SAMPLES     = 512      # ~32 ms por chunk a 16 kHz
+CHUNK_SAMPLES     = 512      # ~32 ms por chunk a 16 kHz (Silero-VAD exige exactamente 512)
 VAD_THRESHOLD     = float(os.environ.get("SOFIA_VAD_THRESHOLD", "0.45"))
 SILENCE_CHUNKS    = 20       # chunks de silencio para fin de frase (~640 ms)
 MAX_VOICE_SECONDS = 8
@@ -358,6 +358,7 @@ class Escuchador:
             dtype="float32",
             blocksize=CHUNK_SAMPLES,
             device=self._device_idx,
+            latency='high',  # buffer interno más grande para dispositivos USB
             callback=callback,
         ):
             self._parar.wait()

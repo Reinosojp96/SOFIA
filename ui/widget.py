@@ -101,7 +101,7 @@ class AleWidget(QWidget):
         panel.setGraphicsEffect(sombra)
 
         layout_externo = QVBoxLayout(self)
-        layout_externo.setContentsMargins(0, 0, 0, 0)
+        layout_externo.setContentsMargins(14, 14, 14, 14)  # margen para QGraphicsDropShadowEffect
         layout_externo.addWidget(panel)
 
         layout = QVBoxLayout(panel)
