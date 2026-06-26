@@ -32,6 +32,7 @@ python-dotenv>=0.21.0          # carga variables de entorno desde .env (opcional
 PyQt6
 pytest 
 requests
+yt-dlp
 # ── Control de escritorio ─────────────────────────────────────────────────────
 
 psutil>=5.9                 # detección de procesos activos

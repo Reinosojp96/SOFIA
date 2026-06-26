@@ -24,6 +24,34 @@ def _quitar_tildes(texto: str) -> str:
     )
 
 
+# Correcciones de errores frecuentes del STT (Whisper), token a token.
+# El audio corto + palabras en inglés ("Word", "Excel") hace que Whisper
+# devuelva variantes fonéticas. Como _normalizar() corrige el texto ANTES
+# de rutearlo Y ese mismo texto corregido se pasa a la skill, esto arregla
+# de una sola vez el ruteo y el parseo interno de cada skill.
+# Solo se corrigen tokens COMPLETOS (no subcadenas), para no romper otras palabras.
+_CORRECCIONES_STT = {
+    # "word" mal transcrito (visto en logs: ward, warp, wolf, worth, words...)
+    "ward": "word", "warp": "word", "wolf": "word", "worth": "word",
+    "words": "word", "wort": "word", "wordt": "word", "worl": "word",
+    "warth": "word", "guord": "word", "wored": "word",
+    # "excel"
+    "exel": "excel", "excell": "excel", "exell": "excel",
+    # "chrome"
+    "crome": "chrome", "croom": "chrome", "crom": "chrome",
+    # verbos de ventana mal oídos
+    "minimisa": "minimiza", "minimís": "minimiza",
+    "maximisa": "maximiza",
+    # "cierra" / "tierra"/"sierra" cuando va seguido de app
+    # (se corrigen solo si la siguiente palabra es una app; ver _corregir_secuencia)
+}
+
+# Correcciones que dependen del contexto (palabra + siguiente).
+# Ej.: "tierra word" / "sierra word" -> "cierra word" (no tocar "tierra" sola).
+_APPS = {"word", "excel", "chrome", "powerpoint", "ventana", "pestana", "navegador"}
+_VERBOS_CERRAR_MAL = {"tierra", "sierra", "yerra", "fierra"}
+
+
 class Router:
     def __init__(self):
         self._skills: list[tuple[str, list[str], callable]] = []
@@ -73,7 +101,19 @@ class Router:
         texto = _quitar_tildes(texto)
         texto = re.sub(r"[¿?¡!.,;:]+", " ", texto)
         texto = re.sub(r"\s+", " ", texto).strip()
+        texto = self._corregir_stt(texto)
         return texto
+
+    def _corregir_stt(self, texto: str) -> str:
+        """Corrige errores frecuentes del STT token a token (ver _CORRECCIONES_STT)."""
+        tokens = texto.split()
+        # 1) correcciones simples token a token
+        tokens = [_CORRECCIONES_STT.get(t, t) for t in tokens]
+        # 2) correcciones por contexto: "tierra/sierra word" -> "cierra word"
+        for i in range(len(tokens) - 1):
+            if tokens[i] in _VERBOS_CERRAR_MAL and tokens[i + 1] in _APPS:
+                tokens[i] = "cierra"
+        return " ".join(tokens)
 
     def procesar(self, texto: str) -> str:
         """Ejecuta la skill correspondiente y devuelve la respuesta."""

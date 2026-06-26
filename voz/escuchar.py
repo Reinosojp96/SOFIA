@@ -74,6 +74,13 @@ VARIANTES: dict[str, list[str]] = {
         "fía", "sofiy", "sofı", "so fia", "so fía",
         # errores reales vistos con whisper "tiny" en el log:
         "novia", "ovia", "via", "vía", "ovía", "obia",
+        # errores observados en producción con Intel SST omnidireccional:
+        "lofia", "lofía",
+        "sufia", "sufía", "su fía", "su fia",
+        "sobia", "sobía", "sobea",
+        "esporia", "ofía", "ofia",
+        "lo fía", "lo fia",
+        "delopia", "avery",
     ],
     "nova":   ["nova", "nove", "noba", "nóva"],
     "ale":    ["ale", "alé", "allé", "halle"],
@@ -83,8 +90,8 @@ VARIANTES: dict[str, list[str]] = {
 # Audio
 SAMPLE_RATE       = 16_000   # Hz requerido por Silero-VAD y Whisper
 CHUNK_SAMPLES     = 512      # Silero-VAD exige exactamente 512 muestras a 16 kHz
-VAD_THRESHOLD     = float(os.environ.get("SOFIA_VAD_THRESHOLD", "0.35"))
-SILENCE_CHUNKS    = int(os.environ.get("SOFIA_SILENCE_CHUNKS", "25"))  # ~800 ms
+VAD_THRESHOLD     = float(os.environ.get("SOFIA_VAD_THRESHOLD", "0.50"))
+SILENCE_CHUNKS    = int(os.environ.get("SOFIA_SILENCE_CHUNKS", "18"))  # ~580 ms — corte más rápido
 MAX_VOICE_SECONDS = 8
 _AUDIO_QUEUE_MAXSIZE = 400
 
@@ -186,13 +193,25 @@ def _elegir_samplerate(device_idx, device_info) -> int:
 
 # Vocabulario que se le "sugiere" a Whisper para sesgar el reconocimiento.
 INITIAL_PROMPT = (
+    # Este prompt le dice a Whisper qué palabras esperar.
+    # CRÍTICO: incluir exactamente los nombres de apps tal como el usuario los dice,
+    # para evitar que Whisper los transcriba como palabras en inglés o inventadas.
+    # Ejemplo documentado: "Word" -> "worth"/"wolf"/"reward" sin este prompt.
     "Sofía, abre Word, abre Excel, abre PowerPoint, abre Chrome, "
     "abre Brave, abre el navegador, abre WhatsApp, abre Spotify, "
     "abre la calculadora, abre el bloc de notas, abre Visual Studio Code, "
-    "cierra Chrome, escanear aplicaciones, qué hora es, qué fecha es, "
-    "cómo está el clima en Ibagué, reproduce música en YouTube, "
-    "anota que, qué tareas tengo, crea una carpeta, crea un archivo, "
-    "copia, mueve, elimina, duplica."
+    "abre una carpeta, abre el explorador de archivos, "
+    "cierra Word, cierra Chrome, cierra Excel, cierra la ventana, "
+    "escanear aplicaciones, buscar aplicaciones, "
+    "qué hora es, qué fecha es, qué día es, "
+    "cómo está el clima en Ibagué, cuál es el clima, "
+    "reproduce música en YouTube, pon música, "
+    "anota que, agrega una tarea, qué tareas tengo, "
+    "crea una carpeta, crea un archivo, crea un documento, "
+    "copia, mueve, elimina, duplica, "
+    "cuánto es dos más dos, cuánto es, cuál es la diferencia entre, "
+    "qué es un agujero negro, explícame, cuéntame sobre, "
+    "haz un documento en Word, abre un documento nuevo."
 )
 _vocab_extra = os.environ.get("SOFIA_VOCAB", "").strip()
 if _vocab_extra:
@@ -534,13 +553,22 @@ class Escuchador:
     def _transcribir(self, audio: np.ndarray, modelo=None, usar_prompt=True) -> str:
         m = modelo or self._whisper_cmd or self._whisper_ww
         audio = _normalizar_volumen(audio)
+        # beam_size=5 para el modelo de comandos: busca más candidatos antes de
+        # decidir -> mucho menos probable que "Word" salga como "worth" o "wolf".
+        # El modelo tiny de wake-word sigue con beam_size=1 (velocidad).
+        es_ww = (modelo is not None and modelo is self._whisper_ww
+                 and self._whisper_cmd is not None)
+        _beam = 1 if (not usar_prompt or modelo is self._whisper_ww) else 5
         segments, _ = m.transcribe(
             audio,
             language="es",
-            beam_size=1,
+            beam_size=_beam,
             vad_filter=False,
             word_timestamps=False,
             initial_prompt=INITIAL_PROMPT if usar_prompt else None,
+            temperature=0.0,          # sin aleatoriedad -> resultados estables
+            condition_on_previous_text=False,  # evita "arrastre" entre frases
+            no_speech_threshold=0.6,  # descarta segmentos de silencio/ruido
         )
         texto = " ".join(seg.text for seg in segments).lower().strip()
         if texto:
